@@ -29,6 +29,11 @@ func AddPane() error {
 		return fmt.Errorf("failed to load watchlist: %w", err)
 	}
 
+	if wl.Contains(paneID) {
+		fmt.Printf("Pane %s is already being watched\n", paneID)
+		return nil
+	}
+
 	wl.Add(paneID)
 
 	if err := wl.Save(); err != nil {

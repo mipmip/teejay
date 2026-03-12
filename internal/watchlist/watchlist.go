@@ -9,7 +9,16 @@ import (
 
 type Pane struct {
 	ID      string    `json:"id"`
+	Name    string    `json:"name,omitempty"`
 	AddedAt time.Time `json:"added_at"`
+}
+
+// DisplayName returns the custom name if set, otherwise the pane ID.
+func (p Pane) DisplayName() string {
+	if p.Name != "" {
+		return p.Name
+	}
+	return p.ID
 }
 
 type Watchlist struct {
@@ -42,6 +51,7 @@ func Load() (*Watchlist, error) {
 	if err := json.Unmarshal(data, &wl); err != nil {
 		return nil, err
 	}
+	wl.Deduplicate()
 	return &wl, nil
 }
 
@@ -74,4 +84,48 @@ func (wl *Watchlist) Add(paneID string) {
 		ID:      paneID,
 		AddedAt: time.Now(),
 	})
+}
+
+// Contains returns true if the pane ID is already in the watchlist.
+func (wl *Watchlist) Contains(paneID string) bool {
+	for _, p := range wl.Panes {
+		if p.ID == paneID {
+			return true
+		}
+	}
+	return false
+}
+
+// Deduplicate removes duplicate pane entries, keeping the first occurrence.
+func (wl *Watchlist) Deduplicate() {
+	seen := make(map[string]bool)
+	unique := make([]Pane, 0, len(wl.Panes))
+	for _, p := range wl.Panes {
+		if !seen[p.ID] {
+			seen[p.ID] = true
+			unique = append(unique, p)
+		}
+	}
+	wl.Panes = unique
+}
+
+// Remove removes a pane by ID from the watchlist.
+func (wl *Watchlist) Remove(paneID string) {
+	filtered := make([]Pane, 0, len(wl.Panes))
+	for _, p := range wl.Panes {
+		if p.ID != paneID {
+			filtered = append(filtered, p)
+		}
+	}
+	wl.Panes = filtered
+}
+
+// Rename sets the display name for a pane by ID.
+func (wl *Watchlist) Rename(paneID, name string) {
+	for i := range wl.Panes {
+		if wl.Panes[i].ID == paneID {
+			wl.Panes[i].Name = name
+			return
+		}
+	}
 }

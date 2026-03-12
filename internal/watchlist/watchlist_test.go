@@ -69,3 +69,156 @@ func TestAdd(t *testing.T) {
 		t.Error("Panes[0].AddedAt is zero, want non-zero")
 	}
 }
+
+func TestContains(t *testing.T) {
+	wl := &Watchlist{}
+	wl.Add("%0")
+	wl.Add("%1")
+
+	if !wl.Contains("%0") {
+		t.Error("Contains(%0) = false, want true")
+	}
+	if !wl.Contains("%1") {
+		t.Error("Contains(%1) = false, want true")
+	}
+	if wl.Contains("%2") {
+		t.Error("Contains(%2) = true, want false")
+	}
+}
+
+func TestContainsEmpty(t *testing.T) {
+	wl := &Watchlist{}
+
+	if wl.Contains("%0") {
+		t.Error("Contains(%0) on empty watchlist = true, want false")
+	}
+}
+
+func TestDeduplicate(t *testing.T) {
+	wl := &Watchlist{
+		Panes: []Pane{
+			{ID: "%0"},
+			{ID: "%1"},
+			{ID: "%0"}, // duplicate
+			{ID: "%2"},
+			{ID: "%1"}, // duplicate
+		},
+	}
+
+	wl.Deduplicate()
+
+	if len(wl.Panes) != 3 {
+		t.Fatalf("Deduplicate() resulted in %d panes, want 3", len(wl.Panes))
+	}
+	expected := []string{"%0", "%1", "%2"}
+	for i, want := range expected {
+		if wl.Panes[i].ID != want {
+			t.Errorf("Panes[%d].ID = %q, want %q", i, wl.Panes[i].ID, want)
+		}
+	}
+}
+
+func TestDeduplicateNoDuplicates(t *testing.T) {
+	wl := &Watchlist{
+		Panes: []Pane{
+			{ID: "%0"},
+			{ID: "%1"},
+			{ID: "%2"},
+		},
+	}
+
+	wl.Deduplicate()
+
+	if len(wl.Panes) != 3 {
+		t.Fatalf("Deduplicate() resulted in %d panes, want 3", len(wl.Panes))
+	}
+}
+
+func TestDeduplicateEmpty(t *testing.T) {
+	wl := &Watchlist{}
+
+	wl.Deduplicate()
+
+	if len(wl.Panes) != 0 {
+		t.Fatalf("Deduplicate() on empty resulted in %d panes, want 0", len(wl.Panes))
+	}
+}
+
+func TestRemove(t *testing.T) {
+	wl := &Watchlist{
+		Panes: []Pane{
+			{ID: "%0"},
+			{ID: "%1"},
+			{ID: "%2"},
+		},
+	}
+
+	wl.Remove("%1")
+
+	if len(wl.Panes) != 2 {
+		t.Fatalf("Remove() resulted in %d panes, want 2", len(wl.Panes))
+	}
+	if wl.Panes[0].ID != "%0" || wl.Panes[1].ID != "%2" {
+		t.Errorf("Remove() left wrong panes: %v", wl.Panes)
+	}
+}
+
+func TestRemoveNonExistent(t *testing.T) {
+	wl := &Watchlist{
+		Panes: []Pane{
+			{ID: "%0"},
+			{ID: "%1"},
+		},
+	}
+
+	wl.Remove("%99")
+
+	if len(wl.Panes) != 2 {
+		t.Fatalf("Remove() non-existent resulted in %d panes, want 2", len(wl.Panes))
+	}
+}
+
+func TestRename(t *testing.T) {
+	wl := &Watchlist{
+		Panes: []Pane{
+			{ID: "%0"},
+			{ID: "%1"},
+		},
+	}
+
+	wl.Rename("%1", "my-pane")
+
+	if wl.Panes[1].Name != "my-pane" {
+		t.Errorf("Rename() resulted in Name = %q, want 'my-pane'", wl.Panes[1].Name)
+	}
+	if wl.Panes[0].Name != "" {
+		t.Errorf("Rename() changed wrong pane, Panes[0].Name = %q", wl.Panes[0].Name)
+	}
+}
+
+func TestRenameNonExistent(t *testing.T) {
+	wl := &Watchlist{
+		Panes: []Pane{
+			{ID: "%0"},
+		},
+	}
+
+	wl.Rename("%99", "test")
+
+	// Should not panic or modify existing panes
+	if wl.Panes[0].Name != "" {
+		t.Errorf("Rename() non-existent modified wrong pane")
+	}
+}
+
+func TestDisplayName(t *testing.T) {
+	paneWithName := Pane{ID: "%0", Name: "my-pane"}
+	paneWithoutName := Pane{ID: "%1"}
+
+	if paneWithName.DisplayName() != "my-pane" {
+		t.Errorf("DisplayName() = %q, want 'my-pane'", paneWithName.DisplayName())
+	}
+	if paneWithoutName.DisplayName() != "%1" {
+		t.Errorf("DisplayName() = %q, want '%%1'", paneWithoutName.DisplayName())
+	}
+}

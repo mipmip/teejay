@@ -1,5 +1,15 @@
 schema: spec-driven
 
+# Project context
+context: |
+  Tech stack: Go with Bubbletea/Lipgloss for TUI
+  Domain: tmux activity monitor - a TUI app for watching tmux panes
+
+  Key libraries:
+  - github.com/charmbracelet/bubbletea - TUI framework
+  - github.com/charmbracelet/lipgloss - Styling
+  - github.com/charmbracelet/bubbles - Common TUI components
+
 # Project context (optional)
 # This is shown to AI when creating artifacts.
 # Add your tech stack, conventions, style guides, domain knowledge, etc.

@@ -2,7 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"io"
+	"math/rand"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -13,6 +16,7 @@ import (
 
 	"tj/internal/alerts"
 	"tj/internal/monitor"
+	"tj/internal/naming"
 	"tj/internal/tmux"
 	"tj/internal/watchlist"
 )
@@ -58,7 +62,73 @@ var (
 
 	readyIndicatorStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#00FF00"))
+
+	browserItemStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("#333333")).
+				Padding(1, 1, 1, 2). // top, right, bottom, left
+				Margin(0, 1)         // vertical, horizontal
+
+	browserItemSelectedStyle = lipgloss.NewStyle().
+					Background(lipgloss.Color("#555555")).
+					Padding(1, 1, 1, 2). // top, right, bottom, left
+					Margin(0, 1)         // vertical, horizontal
+
+	itemTitleStyle = lipgloss.NewStyle().
+			Bold(true)
+
+	// Branding footer styles
+	brandingStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#39FF14")). // Neon green
+			Bold(true)
+
+	versionStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#626262")) // Muted gray
 )
+
+// browserItemDelegate implements list.ItemDelegate for styled browser items
+type browserItemDelegate struct{}
+
+func (d browserItemDelegate) Height() int  { return 5 }
+func (d browserItemDelegate) Spacing() int { return 0 }
+func (d browserItemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d browserItemDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	i, ok := item.(list.DefaultItem)
+	if !ok {
+		return
+	}
+
+	title := i.Title()
+	desc := i.Description()
+
+	// Apply styling based on selection state, using full list width minus margin
+	width := m.Width()
+	contentWidth := width - 2 // subtract left and right margin
+	style := browserItemStyle.Width(contentWidth)
+	if index == m.Index() {
+		style = browserItemSelectedStyle.Width(contentWidth)
+	}
+
+	// For paneItem, render indicator right-aligned on title line with bold title
+	titleLine := title
+	if p, ok := item.(paneItem); ok {
+		indicator := p.Indicator()
+		// Calculate padding: contentWidth - padding(left 2 + right 1) - title length - indicator length - 1 space
+		innerWidth := contentWidth - 3 // padding (2+1)
+		padding := innerWidth - lipgloss.Width(title) - lipgloss.Width(indicator) - 1
+		if padding < 1 {
+			padding = 1
+		}
+		titleLine = title + strings.Repeat(" ", padding) + indicator
+	}
+
+	// Render as single styled block (padding handled by style)
+	// Always include desc line (even if empty) to maintain consistent height
+	content := titleLine + "\n" + desc
+	fmt.Fprintln(w, style.Render(content))
+}
 
 // previewTickMsg is sent periodically to trigger preview refresh
 type previewTickMsg struct{}
@@ -77,21 +147,30 @@ type paneItem struct {
 	addedAt time.Time
 	status  monitor.PaneStatus
 	frame   int
+	command string // current foreground process
 }
 
 func (p paneItem) Title() string {
-	indicator := p.status.IndicatorAnimated(p.frame)
-	// Apply green styling for Ready status
-	if p.status == monitor.Ready {
-		indicator = readyIndicatorStyle.Render(indicator)
-	}
 	displayName := p.id
 	if p.name != "" {
 		displayName = p.name
 	}
-	return indicator + " " + displayName
+	return displayName
 }
-func (p paneItem) Description() string { return p.id + " • added " + p.addedAt.Format("2006-01-02 15:04") }
+
+func (p paneItem) Indicator() string {
+	indicator := p.status.IndicatorAnimated(p.frame)
+	if p.status == monitor.Waiting {
+		indicator = readyIndicatorStyle.Render(indicator)
+	}
+	return indicator
+}
+func (p paneItem) Description() string {
+	if p.command != "" {
+		return p.command
+	}
+	return ""
+}
 func (p paneItem) FilterValue() string { return p.id }
 
 // sessionItem implements list.Item for session browser selection
@@ -133,6 +212,7 @@ type Model struct {
 	watchlist      *watchlist.Watchlist
 	monitor        *monitor.Monitor
 	paneStatuses   map[string]monitor.PaneStatus
+	paneCommands   map[string]string // current foreground command per pane
 	empty          bool
 	loadErr        error
 	selectedPaneID string
@@ -140,6 +220,7 @@ type Model struct {
 	previewErr     error
 	width          int
 	height         int
+	panelHeight    int
 	editing        bool
 	deleting       bool
 	notInTmuxMsg   bool
@@ -154,12 +235,15 @@ type Model struct {
 	configMenuItem  configMenuItem    // selected menu item in configure popup
 	configEditingName bool            // true when editing name in configure popup
 	watchlistMtime  time.Time         // last known modification time of watchlist file
+	statusMessage   string            // temporary status message to display to user
+	version         string            // app version for footer display
+	brandingShimmer int               // shimmer animation frame (0 = not animating)
 }
 
-func New() Model {
+func New(version string) Model {
 	wl, err := watchlist.Load()
 	if err != nil {
-		return Model{loadErr: err}
+		return Model{loadErr: err, version: version}
 	}
 
 	// Get initial mtime for watchlist file
@@ -172,14 +256,15 @@ func New() Model {
 
 	items := make([]list.Item, len(wl.Panes))
 	for i, p := range wl.Panes {
-		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: monitor.Idle}
+		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: monitor.Busy}
 	}
 
-	l := list.New(items, list.NewDefaultDelegate(), 30, 20)
+	l := list.New(items, browserItemDelegate{}, 30, 20)
 	l.Title = "Watched Panes"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
 	l.SetShowHelp(false)
+	l.SetShowPagination(true)
 	l.Styles.Title = titleStyle
 
 	vp := viewport.New(50, 20)
@@ -195,8 +280,10 @@ func New() Model {
 		watchlist:      wl,
 		monitor:        monitor.New(),
 		paneStatuses:   make(map[string]monitor.PaneStatus),
+		paneCommands:   make(map[string]string),
 		empty:          len(items) == 0,
 		watchlistMtime: wlMtime,
+		version:        version,
 	}
 
 	// Capture initial pane content if there are panes
@@ -210,6 +297,14 @@ func New() Model {
 	return m
 }
 
+// isStalePaneError checks if the error indicates a pane no longer exists in tmux.
+func isStalePaneError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "can't find pane")
+}
+
 func (m *Model) captureSelectedPane() {
 	if m.selectedPaneID == "" {
 		m.previewContent = ""
@@ -219,6 +314,11 @@ func (m *Model) captureSelectedPane() {
 
 	content, err := tmux.CapturePane(m.selectedPaneID)
 	if err != nil {
+		// Check if pane no longer exists in tmux
+		if isStalePaneError(err) {
+			m.removeStalePane(m.selectedPaneID)
+			return
+		}
 		m.previewErr = err
 		m.previewContent = ""
 	} else {
@@ -226,6 +326,26 @@ func (m *Model) captureSelectedPane() {
 		m.previewContent = content
 	}
 	m.viewport.SetContent(m.previewContent)
+}
+
+// removeStalePane removes a pane that no longer exists in tmux from the watchlist
+func (m *Model) removeStalePane(paneID string) {
+	m.statusMessage = fmt.Sprintf("Removed stale pane %s", paneID)
+	m.watchlist.Remove(paneID)
+	m.watchlist.Save()
+	m.refreshList()
+
+	// Update selection if the removed pane was selected
+	if len(m.watchlist.Panes) == 0 {
+		m.empty = true
+		m.selectedPaneID = ""
+		m.previewContent = ""
+		m.previewErr = nil
+	} else {
+		// Select first available pane
+		m.selectedPaneID = m.watchlist.Panes[0].ID
+		m.list.Select(0)
+	}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -236,9 +356,25 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Clear status message on any key press
+	if _, ok := msg.(tea.KeyMsg); ok {
+		m.statusMessage = ""
+	}
+
 	// Handle preview tick - refresh pane content periodically
 	if _, ok := msg.(previewTickMsg); ok {
 		m.tickFrame++
+
+		// Update branding shimmer animation
+		if m.brandingShimmer > 0 {
+			m.brandingShimmer++
+			if m.brandingShimmer > 25 { // Animation complete after ~2.5 seconds
+				m.brandingShimmer = 0
+			}
+		} else if rand.Intn(200) == 0 { // ~0.5% chance per tick to start shimmer
+			m.brandingShimmer = 1
+		}
+
 		// Skip refresh when in modal modes
 		if !m.editing && !m.deleting && !m.browsing && !m.configuring {
 			// Check if watchlist file has been modified externally
@@ -252,8 +388,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				status := m.monitor.Update(m.selectedPaneID, m.previewContent)
 				if prevStatus != status {
 					m.paneStatuses[m.selectedPaneID] = status
-					// Check for Running -> Ready transition and trigger alerts
-					if prevStatus == monitor.Running && status == monitor.Ready {
+					// Check for Busy -> Waiting transition and trigger alerts
+					if prevStatus == monitor.Busy && status == monitor.Waiting {
 						m.triggerAlerts(m.selectedPaneID)
 					}
 				}
@@ -298,8 +434,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.X >= 1 && msg.X <= listWidth+1 {
 				// Calculate which item was clicked
 				// List starts rendering items at y=3 (border + title + spacing)
-				// Each item takes 2 lines in the default delegate (title + description)
-				itemHeight := 2
+				// Each item takes 5 lines with custom delegate (top padding + title + description + bottom padding + spacing)
+				itemHeight := 5
 				headerOffset := 3 // border (1) + title (1) + spacing (1)
 
 				if msg.Y >= headerOffset {
@@ -374,12 +510,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Calculate panel sizes (30% list, 70% preview, minus borders)
 		listWidth := m.width*30/100 - 2
 		previewWidth := m.width*70/100 - 2
-		panelHeight := m.height - 4
+		m.panelHeight = m.height - 2 // leave room for footer
 
+		// List height: panel - border(2) - title(2) - pagination(1)
 		m.list.SetWidth(listWidth)
-		m.list.SetHeight(panelHeight)
+		m.list.SetHeight(m.panelHeight - 5)
 		m.viewport.Width = previewWidth
-		m.viewport.Height = panelHeight
+		m.viewport.Height = m.panelHeight - 4 // border (2) + title (2)
 	}
 
 	// Track previous selection
@@ -470,7 +607,7 @@ func (m Model) updateBrowsing(msg tea.Msg) (tea.Model, tea.Cmd) {
 				msg.Y >= popupY && msg.Y < popupY+popupHeight {
 				// Calculate which item was clicked
 				// Items start after border (1) + padding (1) + title (1) + spacing (1) = 4
-				itemHeight := 2 // title + description
+				itemHeight := 5 // top padding + title + description + bottom padding + spacing
 				headerOffset := 4
 
 				relativeY := msg.Y - popupY
@@ -493,9 +630,11 @@ func (m Model) updateBrowsing(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.loadPaneListForSession(item.name)
 					}
 				} else {
-					// Pane selected - add to watchlist
+					// Pane selected - add to watchlist with guessed name
 					if item, ok := m.browserList.SelectedItem().(browserItem); ok {
-						m.watchlist.Add(item.paneInfo.ID)
+						// Use naming package to guess a name (TUI doesn't prompt, user can rename later)
+						guessedName, _ := naming.GuessName(item.paneInfo)
+						m.watchlist.AddWithName(item.paneInfo.ID, guessedName)
 						m.watchlist.Save()
 						m.refreshList()
 						m.empty = false
@@ -701,10 +840,19 @@ func (m *Model) refreshList() {
 }
 
 func (m *Model) refreshListWithFrame(frame int) {
+	// Fetch current commands for all panes
+	for _, p := range m.watchlist.Panes {
+		if paneInfo, err := tmux.GetPaneByID(p.ID); err == nil && paneInfo != nil {
+			m.paneCommands[p.ID] = paneInfo.Command
+		}
+		// On error, keep last known command (graceful degradation)
+	}
+
 	items := make([]list.Item, len(m.watchlist.Panes))
 	for i, p := range m.watchlist.Panes {
 		status := m.paneStatuses[p.ID]
-		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: status, frame: frame}
+		command := m.paneCommands[p.ID]
+		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: status, frame: frame, command: command}
 	}
 	m.list.SetItems(items)
 	m.empty = len(items) == 0
@@ -757,8 +905,8 @@ func (m *Model) loadSessionList() {
 		}
 	}
 
-	// Create session list
-	delegate := list.NewDefaultDelegate()
+	// Create session list with custom styled delegate
+	delegate := browserItemDelegate{}
 	m.browserList = list.New(items, delegate, 50, 15)
 	m.browserList.Title = "Select Session"
 	m.browserList.SetShowStatusBar(false)
@@ -778,8 +926,8 @@ func (m *Model) loadPaneListForSession(sessionName string) {
 		}
 	}
 
-	// Create pane list
-	delegate := list.NewDefaultDelegate()
+	// Create pane list with custom styled delegate
+	delegate := browserItemDelegate{}
 	m.browserList = list.New(items, delegate, 50, 15)
 	m.browserList.Title = "Select Pane (" + sessionName + ")"
 	m.browserList.SetShowStatusBar(false)
@@ -859,11 +1007,61 @@ func (m Model) View() string {
 		footer = errorStyle.Render(fmt.Sprintf("Delete %s? (y/n)", paneName))
 	} else if m.notInTmuxMsg {
 		footer = errorStyle.Render("Cannot switch: not running inside tmux") + "\n" + helpStyle.Render("Press Esc to dismiss")
+	} else if m.statusMessage != "" {
+		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • a: add • c: configure • d: delete • q: quit")
 	} else {
 		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • a: add • c: configure • d: delete • q: quit")
 	}
 
+	// Add branding to footer line if terminal is wide enough
+	if m.width >= 80 {
+		branding := m.renderBrandingFooter()
+		footerWidth := lipgloss.Width(footer)
+		brandingWidth := lipgloss.Width(branding)
+		padding := m.width - footerWidth - brandingWidth
+		if padding > 0 {
+			footer = footer + strings.Repeat(" ", padding) + branding
+		}
+	}
+
 	return layout + "\n" + footer
+}
+
+// renderBrandingFooter returns the "Terminal Junkie" branding with version
+func (m Model) renderBrandingFooter() string {
+	text := "Terminal Junkie"
+	var brand string
+
+	if m.brandingShimmer > 0 {
+		// Shimmer animation - gradient sweep across text
+		baseColor := lipgloss.Color("#39FF14")    // Neon green
+		shimmerColor := lipgloss.Color("#AFFFAF") // Bright mint green
+		midColor := lipgloss.Color("#6FFF6F")     // Light green
+
+		for i, ch := range text {
+			// Calculate distance from shimmer position
+			shimmerPos := float64(m.brandingShimmer-1) * 0.8
+			dist := shimmerPos - float64(i)
+			if dist < 0 {
+				dist = -dist
+			}
+
+			var charStyle lipgloss.Style
+			if dist < 2 {
+				charStyle = lipgloss.NewStyle().Foreground(shimmerColor).Bold(true)
+			} else if dist < 4 {
+				charStyle = lipgloss.NewStyle().Foreground(midColor).Bold(true)
+			} else {
+				charStyle = lipgloss.NewStyle().Foreground(baseColor).Bold(true)
+			}
+			brand += charStyle.Render(string(ch))
+		}
+	} else {
+		brand = brandingStyle.Render(text)
+	}
+
+	ver := versionStyle.Render(" " + m.version)
+	return brand + ver
 }
 
 func (m Model) renderBrowserPopup() string {

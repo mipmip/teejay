@@ -58,3 +58,22 @@ func TestPaneInfoSessionID(t *testing.T) {
 		t.Errorf("SessionID format: got %q, want %q", got, expected)
 	}
 }
+
+func TestPaneInfoWindowName(t *testing.T) {
+	// Test that WindowName is populated by ListAllPanes
+	if os.Getenv("TMUX") == "" {
+		t.Skip("Not running inside tmux, skipping WindowName test")
+	}
+
+	panes, err := ListAllPanes()
+	if err != nil {
+		t.Fatalf("ListAllPanes() error = %v", err)
+	}
+
+	// Each pane should have a window name (tmux always has one)
+	for i, pane := range panes {
+		if pane.WindowName == "" {
+			t.Errorf("Pane %d has empty WindowName", i)
+		}
+	}
+}

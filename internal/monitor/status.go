@@ -7,23 +7,19 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 type PaneStatus int
 
 const (
-	// Idle means the pane content has been stable with no prompt detected.
-	Idle PaneStatus = iota
-	// Running means the pane content is actively changing.
-	Running
-	// Ready means the pane is waiting for user input (prompt detected).
-	Ready
+	// Busy means the pane is active or has no detected prompt.
+	Busy PaneStatus = iota
+	// Waiting means the pane is waiting for user input (prompt detected).
+	Waiting
 )
 
 // String returns a human-readable status name.
 func (s PaneStatus) String() string {
 	switch s {
-	case Running:
-		return "Running"
-	case Ready:
-		return "Ready"
-	case Idle:
-		return "Idle"
+	case Busy:
+		return "Busy"
+	case Waiting:
+		return "Waiting"
 	default:
 		return "Unknown"
 	}
@@ -32,27 +28,23 @@ func (s PaneStatus) String() string {
 // Indicator returns a single-character status indicator for display.
 func (s PaneStatus) Indicator() string {
 	switch s {
-	case Running:
+	case Busy:
+		return spinnerFrames[0] // First spinner frame for static display
+	case Waiting:
 		return "●"
-	case Ready:
-		return "?"
-	case Idle:
-		return "○"
 	default:
 		return " "
 	}
 }
 
-// IndicatorAnimated returns a status indicator, with animation for Running state.
+// IndicatorAnimated returns a status indicator, with animation for Busy state.
 // The frame parameter controls which animation frame to display (cycles through spinner).
 func (s PaneStatus) IndicatorAnimated(frame int) string {
 	switch s {
-	case Running:
+	case Busy:
 		return spinnerFrames[frame%len(spinnerFrames)]
-	case Ready:
+	case Waiting:
 		return "●"
-	case Idle:
-		return "○"
 	default:
 		return " "
 	}

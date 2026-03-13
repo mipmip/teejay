@@ -18,20 +18,20 @@ func TestNewMonitor(t *testing.T) {
 func TestUpdateFirstSeen(t *testing.T) {
 	m := New()
 
-	// First time seeing a pane should return Running (no prompt)
+	// First time seeing a pane should return Busy (no prompt)
 	status := m.Update("%0", "some output")
-	if status != Running {
-		t.Errorf("First update without prompt: got %v, want Running", status)
+	if status != Busy {
+		t.Errorf("First update without prompt: got %v, want Busy", status)
 	}
 }
 
 func TestUpdateFirstSeenWithPrompt(t *testing.T) {
 	m := New()
 
-	// First time with prompt should return Ready
+	// First time with prompt should return Waiting
 	status := m.Update("%0", "Do you want to proceed?")
-	if status != Ready {
-		t.Errorf("First update with prompt: got %v, want Ready", status)
+	if status != Waiting {
+		t.Errorf("First update with prompt: got %v, want Waiting", status)
 	}
 }
 
@@ -40,8 +40,8 @@ func TestUpdateContentChanged(t *testing.T) {
 
 	m.Update("%0", "output 1")
 	status := m.Update("%0", "output 2")
-	if status != Running {
-		t.Errorf("Content changed: got %v, want Running", status)
+	if status != Busy {
+		t.Errorf("Content changed: got %v, want Busy", status)
 	}
 }
 
@@ -50,8 +50,8 @@ func TestUpdatePromptDetected(t *testing.T) {
 
 	m.Update("%0", "working...")
 	status := m.Update("%0", "No, and tell Claude what to do differently")
-	if status != Ready {
-		t.Errorf("Claude prompt: got %v, want Ready", status)
+	if status != Waiting {
+		t.Errorf("Claude prompt: got %v, want Waiting", status)
 	}
 }
 
@@ -59,8 +59,8 @@ func TestUpdateAiderPrompt(t *testing.T) {
 	m := New()
 
 	status := m.Update("%0", "Apply changes? (Y)es/(N)o")
-	if status != Ready {
-		t.Errorf("Aider prompt: got %v, want Ready", status)
+	if status != Waiting {
+		t.Errorf("Aider prompt: got %v, want Waiting", status)
 	}
 }
 
@@ -68,47 +68,14 @@ func TestUpdateShellPrompt(t *testing.T) {
 	m := New()
 
 	status := m.Update("%0", "user@host:~$")
-	if status != Ready {
-		t.Errorf("Shell prompt $: got %v, want Ready", status)
+	if status != Waiting {
+		t.Errorf("Shell prompt $: got %v, want Waiting", status)
 	}
 
 	m2 := New()
 	status = m2.Update("%1", ">>> ")
-	if status != Ready {
-		t.Errorf("Shell prompt >: got %v, want Ready", status)
-	}
-}
-
-func TestUpdateIdleTransition(t *testing.T) {
-	m := New()
-
-	// Initial state
-	m.Update("%0", "stable content")
-
-	// Content stays the same for idleThreshold ticks
-	var status PaneStatus
-	for i := 0; i < idleThreshold; i++ {
-		status = m.Update("%0", "stable content")
-	}
-
-	if status != Idle {
-		t.Errorf("After %d stable ticks: got %v, want Idle", idleThreshold, status)
-	}
-}
-
-func TestUpdateIdleToRunning(t *testing.T) {
-	m := New()
-
-	// Get to idle state
-	m.Update("%0", "stable content")
-	for i := 0; i < idleThreshold; i++ {
-		m.Update("%0", "stable content")
-	}
-
-	// Content changes - should go back to Running
-	status := m.Update("%0", "new content")
-	if status != Running {
-		t.Errorf("Content changed from idle: got %v, want Running", status)
+	if status != Waiting {
+		t.Errorf("Shell prompt >: got %v, want Waiting", status)
 	}
 }
 
@@ -141,9 +108,8 @@ func TestStatusIndicator(t *testing.T) {
 		status PaneStatus
 		want   string
 	}{
-		{Running, "●"},
-		{Ready, "?"},
-		{Idle, "○"},
+		{Busy, "⠋"},    // First spinner frame for Busy
+		{Waiting, "●"}, // Green circle for Waiting
 	}
 
 	for _, tt := range tests {
@@ -155,46 +121,38 @@ func TestStatusIndicator(t *testing.T) {
 }
 
 func TestStatusIndicatorAnimated(t *testing.T) {
-	// Test Running cycles through spinner frames
+	// Test Busy cycles through spinner frames
 	expectedFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	for i, expected := range expectedFrames {
-		got := Running.IndicatorAnimated(i)
+		got := Busy.IndicatorAnimated(i)
 		if got != expected {
-			t.Errorf("Running.IndicatorAnimated(%d) = %q, want %q", i, got, expected)
+			t.Errorf("Busy.IndicatorAnimated(%d) = %q, want %q", i, got, expected)
 		}
 	}
 
 	// Test frame wraps around
-	if got := Running.IndicatorAnimated(10); got != "⠋" {
-		t.Errorf("Running.IndicatorAnimated(10) = %q, want %q (should wrap)", got, "⠋")
+	if got := Busy.IndicatorAnimated(10); got != "⠋" {
+		t.Errorf("Busy.IndicatorAnimated(10) = %q, want %q (should wrap)", got, "⠋")
 	}
-	if got := Running.IndicatorAnimated(15); got != "⠴" {
-		t.Errorf("Running.IndicatorAnimated(15) = %q, want %q (should wrap)", got, "⠴")
-	}
-
-	// Test Ready returns filled circle (not animated)
-	if got := Ready.IndicatorAnimated(0); got != "●" {
-		t.Errorf("Ready.IndicatorAnimated(0) = %q, want %q", got, "●")
-	}
-	if got := Ready.IndicatorAnimated(5); got != "●" {
-		t.Errorf("Ready.IndicatorAnimated(5) = %q, want %q", got, "●")
+	if got := Busy.IndicatorAnimated(15); got != "⠴" {
+		t.Errorf("Busy.IndicatorAnimated(15) = %q, want %q (should wrap)", got, "⠴")
 	}
 
-	// Test Idle returns empty circle (not animated)
-	if got := Idle.IndicatorAnimated(0); got != "○" {
-		t.Errorf("Idle.IndicatorAnimated(0) = %q, want %q", got, "○")
+	// Test Waiting returns filled circle (not animated)
+	if got := Waiting.IndicatorAnimated(0); got != "●" {
+		t.Errorf("Waiting.IndicatorAnimated(0) = %q, want %q", got, "●")
+	}
+	if got := Waiting.IndicatorAnimated(5); got != "●" {
+		t.Errorf("Waiting.IndicatorAnimated(5) = %q, want %q", got, "●")
 	}
 }
 
 func TestStatusString(t *testing.T) {
-	if Running.String() != "Running" {
-		t.Error("Running.String() != Running")
+	if Busy.String() != "Busy" {
+		t.Error("Busy.String() != Busy")
 	}
-	if Ready.String() != "Ready" {
-		t.Error("Ready.String() != Ready")
-	}
-	if Idle.String() != "Idle" {
-		t.Error("Idle.String() != Idle")
+	if Waiting.String() != "Waiting" {
+		t.Error("Waiting.String() != Waiting")
 	}
 }
 
@@ -208,33 +166,30 @@ func TestMultiplePanes(t *testing.T) {
 	status0 := m.Update("%0", "pane 0 content")
 	status1 := m.Update("%1", "Do you want to proceed?")
 
-	// Pane 0 should be Running (first update was different content)
-	// Actually second update is same content, so it's still running but moving toward idle
-	if status0 == Idle {
-		t.Error("Pane 0 should not be Idle after just 2 updates")
+	// Pane 0 should be Busy (no prompt detected)
+	if status0 != Busy {
+		t.Errorf("Pane 0 without prompt: got %v, want Busy", status0)
 	}
 
-	// Pane 1 should be Ready (has prompt)
-	if status1 != Ready {
-		t.Errorf("Pane 1 with prompt: got %v, want Ready", status1)
+	// Pane 1 should be Waiting (has prompt)
+	if status1 != Waiting {
+		t.Errorf("Pane 1 with prompt: got %v, want Waiting", status1)
 	}
 }
 
 func TestLongContent(t *testing.T) {
 	m := New()
 
-	// Test with large content
+	// Test with large content (no prompt)
 	longContent := strings.Repeat("line of output\n", 1000)
 	status := m.Update("%0", longContent)
-	if status != Running {
-		t.Errorf("Long content: got %v, want Running", status)
+	if status != Busy {
+		t.Errorf("Long content: got %v, want Busy", status)
 	}
 
-	// Same content should move toward idle
-	for i := 0; i < idleThreshold; i++ {
-		status = m.Update("%0", longContent)
-	}
-	if status != Idle {
-		t.Errorf("Long stable content: got %v, want Idle", status)
+	// Same content still returns Busy (no idle state anymore)
+	status = m.Update("%0", longContent)
+	if status != Busy {
+		t.Errorf("Long stable content: got %v, want Busy", status)
 	}
 }

@@ -58,6 +58,7 @@
               gopls
               gotools
               go-tools
+              goreleaser
             ];
 
             shellHook = ''

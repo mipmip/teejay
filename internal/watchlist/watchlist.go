@@ -89,6 +89,15 @@ func (wl *Watchlist) Add(paneID string) {
 	})
 }
 
+// AddWithName adds a new pane to the watchlist with a specified name.
+func (wl *Watchlist) AddWithName(paneID, name string) {
+	wl.Panes = append(wl.Panes, Pane{
+		ID:      paneID,
+		Name:    name,
+		AddedAt: time.Now(),
+	})
+}
+
 // Contains returns true if the pane ID is already in the watchlist.
 func (wl *Watchlist) Contains(paneID string) bool {
 	for _, p := range wl.Panes {

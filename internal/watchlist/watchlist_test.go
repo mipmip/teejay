@@ -322,3 +322,43 @@ func TestAlertFieldsPersistence(t *testing.T) {
 		t.Error("NotifyOnReady not persisted")
 	}
 }
+
+func TestAddWithName(t *testing.T) {
+	wl := &Watchlist{}
+
+	wl.AddWithName("%5", "my-editor")
+
+	if len(wl.Panes) != 1 {
+		t.Fatalf("AddWithName() resulted in %d panes, want 1", len(wl.Panes))
+	}
+	if wl.Panes[0].ID != "%5" {
+		t.Errorf("Panes[0].ID = %q, want %%5", wl.Panes[0].ID)
+	}
+	if wl.Panes[0].Name != "my-editor" {
+		t.Errorf("Panes[0].Name = %q, want 'my-editor'", wl.Panes[0].Name)
+	}
+	if wl.Panes[0].AddedAt.IsZero() {
+		t.Error("Panes[0].AddedAt is zero, want non-zero")
+	}
+}
+
+func TestAddWithNamePersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	wl := &Watchlist{}
+	wl.AddWithName("%0", "nvim-editor")
+
+	if err := wl.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if loaded.Panes[0].Name != "nvim-editor" {
+		t.Errorf("Name not persisted: got %q, want 'nvim-editor'", loaded.Panes[0].Name)
+	}
+}

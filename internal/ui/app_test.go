@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestNewModel(t *testing.T) {
-	m := New()
+	m := New("test")
 	if m.View() == "" {
 		t.Error("View() should return non-empty string")
 	}
@@ -17,7 +20,7 @@ func TestEmptyWatchlistShowsMessage(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New()
+	m := New("test")
 	view := m.View()
 
 	if !strings.Contains(view, "No panes are being watched") {
@@ -31,9 +34,9 @@ func TestEmptyWatchlistShowsMessage(t *testing.T) {
 func TestPaneItemInterface(t *testing.T) {
 	item := paneItem{id: "%5"}
 
-	// Title includes status indicator (○ for Idle which is zero value)
-	if item.Title() != "○ %5" {
-		t.Errorf("Title() = %q, want '○ %%5'", item.Title())
+	// Title returns just the display name (id if no name set)
+	if item.Title() != "%5" {
+		t.Errorf("Title() = %q, want '%%5'", item.Title())
 	}
 	if item.FilterValue() != "%5" {
 		t.Errorf("FilterValue() = %q, want %%5", item.FilterValue())
@@ -44,7 +47,7 @@ func TestModelHasViewportAndList(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New()
+	m := New("test")
 
 	// Model should have viewport initialized (width > 0 after init)
 	// This is a basic structural test
@@ -59,7 +62,7 @@ func TestSplitPanelLayoutWithPanes(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New()
+	m := New("test")
 
 	// With empty watchlist, should not show split panel
 	view := m.View()
@@ -72,7 +75,7 @@ func TestNotInTmuxMessageState(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New()
+	m := New("test")
 
 	// Initially notInTmuxMsg should be false
 	if m.notInTmuxMsg {
@@ -90,7 +93,7 @@ func TestFooterIncludesEnterKeybinding(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New()
+	m := New("test")
 	// The empty state shows different footer, so we check the model has the right structure
 	// For non-empty state, footer would include "Enter: switch"
 	// This is a structural test since we can't easily create panes in test
@@ -103,7 +106,7 @@ func TestConfigurePopupStateTransitions(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New()
+	m := New("test")
 
 	// Initially configuring should be false
 	if m.configuring {
@@ -149,5 +152,135 @@ func TestConfigMenuItemConstants(t *testing.T) {
 	}
 	if configMenuNotify != 2 {
 		t.Error("configMenuNotify should be 2")
+	}
+}
+
+func TestIsStalePaneError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error is not stale",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "can't find pane error is stale",
+			err:      errors.New("can't find pane: %65"),
+			expected: true,
+		},
+		{
+			name:     "can't find pane without ID is stale",
+			err:      errors.New("can't find pane"),
+			expected: true,
+		},
+		{
+			name:     "other error is not stale",
+			err:      errors.New("connection refused"),
+			expected: false,
+		},
+		{
+			name:     "tmux not running is not stale",
+			err:      errors.New("no server running on /tmp/tmux-1000/default"),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isStalePaneError(tt.err)
+			if got != tt.expected {
+				t.Errorf("isStalePaneError(%v) = %v, want %v", tt.err, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestRemoveStalePaneSetsStatusMessage(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	m := New("test")
+
+	// Manually add a pane to the watchlist
+	m.watchlist.Add("%99")
+	m.watchlist.Save()
+	m.refreshList()
+	m.empty = false
+	m.selectedPaneID = "%99"
+
+	// Simulate removing a stale pane
+	m.removeStalePane("%99")
+
+	// Check that status message was set
+	if m.statusMessage == "" {
+		t.Error("statusMessage should be set after removing stale pane")
+	}
+	if !strings.Contains(m.statusMessage, "%99") {
+		t.Errorf("statusMessage should contain pane ID, got: %q", m.statusMessage)
+	}
+
+	// Check that pane was removed from watchlist
+	if m.watchlist.Contains("%99") {
+		t.Error("pane should be removed from watchlist")
+	}
+
+	// Check that empty state is updated
+	if !m.empty {
+		t.Error("empty should be true when last pane is removed")
+	}
+}
+
+func TestRemoveStalePaneWithMultiplePanes(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	m := New("test")
+
+	// Add multiple panes
+	m.watchlist.Add("%98")
+	m.watchlist.Add("%99")
+	m.watchlist.Save()
+	m.refreshList()
+	m.empty = false
+	m.selectedPaneID = "%99"
+
+	// Remove one stale pane
+	m.removeStalePane("%99")
+
+	// Check that only the stale pane was removed
+	if m.watchlist.Contains("%99") {
+		t.Error("stale pane should be removed")
+	}
+	if !m.watchlist.Contains("%98") {
+		t.Error("other pane should remain")
+	}
+
+	// Check selection moved to remaining pane
+	if m.selectedPaneID != "%98" {
+		t.Errorf("selectedPaneID should be %%98, got %q", m.selectedPaneID)
+	}
+
+	// Should not be empty
+	if m.empty {
+		t.Error("empty should be false when panes remain")
+	}
+}
+
+func TestStatusMessageClearsOnKeyPress(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	m := New("test")
+	m.statusMessage = "Test message"
+
+	// Simulate a key press
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(Model)
+
+	if m.statusMessage != "" {
+		t.Errorf("statusMessage should be cleared on key press, got: %q", m.statusMessage)
 	}
 }

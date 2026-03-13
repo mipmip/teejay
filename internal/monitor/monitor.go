@@ -5,14 +5,9 @@ import (
 	"strings"
 )
 
-// idleThreshold is the number of ticks (at 100ms each) before a pane is considered idle.
-// 20 ticks = 2 seconds.
-const idleThreshold = 20
-
 // paneState holds the tracking state for a single pane.
 type paneState struct {
-	hash        [32]byte
-	idleCounter int
+	hash [32]byte
 }
 
 // Monitor tracks activity state for multiple panes.
@@ -29,6 +24,7 @@ func New() *Monitor {
 
 // Update checks the pane content and returns the current status.
 // It computes a hash of the content and compares with the previous hash.
+// Returns Waiting if a prompt is detected, Busy otherwise.
 func (m *Monitor) Update(paneID, content string) PaneStatus {
 	hash := sha256.Sum256([]byte(content))
 
@@ -36,42 +32,20 @@ func (m *Monitor) Update(paneID, content string) PaneStatus {
 	if !exists {
 		// First time seeing this pane
 		m.panes[paneID] = &paneState{
-			hash:        hash,
-			idleCounter: 0,
+			hash: hash,
 		}
-		// Check for prompt on first view
-		if hasPrompt(content) {
-			return Ready
+	} else {
+		// Update hash if content changed
+		if hash != state.hash {
+			state.hash = hash
 		}
-		return Running
 	}
 
-	// Check if content changed
-	contentChanged := hash != state.hash
-	if contentChanged {
-		state.hash = hash
-		state.idleCounter = 0
-	}
-
-	// Check for prompt - takes precedence over running state
+	// Simple two-state logic: prompt detected → Waiting, else → Busy
 	if hasPrompt(content) {
-		state.idleCounter = 0
-		return Ready
+		return Waiting
 	}
-
-	// Content changed but no prompt - running
-	if contentChanged {
-		return Running
-	}
-
-	// Content stable, no prompt - increment idle counter
-	state.idleCounter++
-	if state.idleCounter >= idleThreshold {
-		return Idle
-	}
-
-	// Still in running state but content hasn't changed recently
-	return Running
+	return Busy
 }
 
 // promptPatterns contains strings that indicate a pane is waiting for input.

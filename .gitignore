@@ -2,6 +2,7 @@
 tmon
 result
 tj
+dist/
 *.exe
 *.exe~
 *.dll

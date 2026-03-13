@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"tmon/internal/watchlist"
+	"tj/internal/watchlist"
 )
 
 var ErrNotInTmux = errors.New("not running inside tmux")

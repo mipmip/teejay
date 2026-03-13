@@ -1,4 +1,4 @@
-module tmon
+module tj
 
 go 1.25.5
 

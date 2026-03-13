@@ -8,9 +8,11 @@ import (
 )
 
 type Pane struct {
-	ID      string    `json:"id"`
-	Name    string    `json:"name,omitempty"`
-	AddedAt time.Time `json:"added_at"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name,omitempty"`
+	AddedAt       time.Time `json:"added_at"`
+	SoundOnReady  bool      `json:"sound_on_ready,omitempty"`
+	NotifyOnReady bool      `json:"notify_on_ready,omitempty"`
 }
 
 // DisplayName returns the custom name if set, otherwise the pane ID.
@@ -25,16 +27,17 @@ type Watchlist struct {
 	Panes []Pane `json:"panes"`
 }
 
-func configPath() (string, error) {
+// ConfigPath returns the path to the watchlist configuration file.
+func ConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "tmon", "watchlist.json"), nil
+	return filepath.Join(home, ".config", "teejay", "watchlist.json"), nil
 }
 
 func Load() (*Watchlist, error) {
-	path, err := configPath()
+	path, err := ConfigPath()
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +59,7 @@ func Load() (*Watchlist, error) {
 }
 
 func (wl *Watchlist) Save() error {
-	path, err := configPath()
+	path, err := ConfigPath()
 	if err != nil {
 		return err
 	}
@@ -128,4 +131,34 @@ func (wl *Watchlist) Rename(paneID, name string) {
 			return
 		}
 	}
+}
+
+// SetSound sets the SoundOnReady flag for a pane by ID.
+func (wl *Watchlist) SetSound(paneID string, enabled bool) {
+	for i := range wl.Panes {
+		if wl.Panes[i].ID == paneID {
+			wl.Panes[i].SoundOnReady = enabled
+			return
+		}
+	}
+}
+
+// SetNotify sets the NotifyOnReady flag for a pane by ID.
+func (wl *Watchlist) SetNotify(paneID string, enabled bool) {
+	for i := range wl.Panes {
+		if wl.Panes[i].ID == paneID {
+			wl.Panes[i].NotifyOnReady = enabled
+			return
+		}
+	}
+}
+
+// GetPane returns a pointer to a Pane by ID, or nil if not found.
+func (wl *Watchlist) GetPane(paneID string) *Pane {
+	for i := range wl.Panes {
+		if wl.Panes[i].ID == paneID {
+			return &wl.Panes[i]
+		}
+	}
+	return nil
 }

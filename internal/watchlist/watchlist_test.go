@@ -33,7 +33,7 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 
 	// Verify file exists
-	path := filepath.Join(tmpDir, ".config", "tmon", "watchlist.json")
+	path := filepath.Join(tmpDir, ".config", "teejay", "watchlist.json")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		t.Fatalf("watchlist.json not created")
 	}
@@ -220,5 +220,105 @@ func TestDisplayName(t *testing.T) {
 	}
 	if paneWithoutName.DisplayName() != "%1" {
 		t.Errorf("DisplayName() = %q, want '%%1'", paneWithoutName.DisplayName())
+	}
+}
+
+func TestSetSound(t *testing.T) {
+	wl := &Watchlist{
+		Panes: []Pane{
+			{ID: "%0"},
+			{ID: "%1"},
+		},
+	}
+
+	wl.SetSound("%1", true)
+
+	if !wl.Panes[1].SoundOnReady {
+		t.Error("SetSound(%1, true) did not set SoundOnReady")
+	}
+	if wl.Panes[0].SoundOnReady {
+		t.Error("SetSound() changed wrong pane")
+	}
+
+	wl.SetSound("%1", false)
+	if wl.Panes[1].SoundOnReady {
+		t.Error("SetSound(%1, false) did not unset SoundOnReady")
+	}
+}
+
+func TestSetNotify(t *testing.T) {
+	wl := &Watchlist{
+		Panes: []Pane{
+			{ID: "%0"},
+			{ID: "%1"},
+		},
+	}
+
+	wl.SetNotify("%0", true)
+
+	if !wl.Panes[0].NotifyOnReady {
+		t.Error("SetNotify(%0, true) did not set NotifyOnReady")
+	}
+	if wl.Panes[1].NotifyOnReady {
+		t.Error("SetNotify() changed wrong pane")
+	}
+
+	wl.SetNotify("%0", false)
+	if wl.Panes[0].NotifyOnReady {
+		t.Error("SetNotify(%0, false) did not unset NotifyOnReady")
+	}
+}
+
+func TestGetPane(t *testing.T) {
+	wl := &Watchlist{
+		Panes: []Pane{
+			{ID: "%0", Name: "first"},
+			{ID: "%1", Name: "second"},
+		},
+	}
+
+	p := wl.GetPane("%1")
+	if p == nil {
+		t.Fatal("GetPane(%1) returned nil")
+	}
+	if p.Name != "second" {
+		t.Errorf("GetPane(%%1).Name = %q, want 'second'", p.Name)
+	}
+
+	// Modify through pointer
+	p.Name = "modified"
+	if wl.Panes[1].Name != "modified" {
+		t.Error("GetPane() did not return pointer to actual pane")
+	}
+
+	// Non-existent pane
+	if wl.GetPane("%99") != nil {
+		t.Error("GetPane(%99) should return nil")
+	}
+}
+
+func TestAlertFieldsPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	wl := &Watchlist{}
+	wl.Add("%0")
+	wl.SetSound("%0", true)
+	wl.SetNotify("%0", true)
+
+	if err := wl.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !loaded.Panes[0].SoundOnReady {
+		t.Error("SoundOnReady not persisted")
+	}
+	if !loaded.Panes[0].NotifyOnReady {
+		t.Error("NotifyOnReady not persisted")
 	}
 }

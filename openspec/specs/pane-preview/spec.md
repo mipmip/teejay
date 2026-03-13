@@ -42,6 +42,11 @@ The preview panel SHALL update when the user selects a different pane AND automa
 - **WHEN** the selected pane remains the same
 - **THEN** the preview panel re-captures and displays content every 100ms
 
+#### Scenario: Switch to pane
+- **WHEN** the user presses Enter on a selected pane
+- **THEN** tmux switches to that pane (if running in tmux)
+- **AND** tmon exits
+
 ### Requirement: Scrollable preview
 
 The preview panel SHALL be scrollable when content exceeds the viewport.

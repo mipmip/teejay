@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"tmon/internal/watchlist"
+	"tj/internal/watchlist"
 )
 
 func TestGetTmuxPaneID_Set(t *testing.T) {

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -10,8 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"tmon/internal/tmux"
-	"tmon/internal/watchlist"
+	"tj/internal/alerts"
+	"tj/internal/monitor"
+	"tj/internal/tmux"
+	"tj/internal/watchlist"
 )
 
 var (
@@ -42,6 +45,19 @@ var (
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF6B6B")).
 			Italic(true)
+
+	browserPopupStyle = lipgloss.NewStyle().
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#7D56F4")).
+				Padding(1, 2)
+
+	browserTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#7D56F4")).
+				MarginBottom(1)
+
+	readyIndicatorStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#00FF00"))
 )
 
 // previewTickMsg is sent periodically to trigger preview refresh
@@ -59,22 +75,64 @@ type paneItem struct {
 	id      string
 	name    string
 	addedAt time.Time
+	status  monitor.PaneStatus
+	frame   int
 }
 
 func (p paneItem) Title() string {
-	if p.name != "" {
-		return p.name
+	indicator := p.status.IndicatorAnimated(p.frame)
+	// Apply green styling for Ready status
+	if p.status == monitor.Ready {
+		indicator = readyIndicatorStyle.Render(indicator)
 	}
-	return p.id
+	displayName := p.id
+	if p.name != "" {
+		displayName = p.name
+	}
+	return indicator + " " + displayName
 }
 func (p paneItem) Description() string { return p.id + " • added " + p.addedAt.Format("2006-01-02 15:04") }
 func (p paneItem) FilterValue() string { return p.id }
+
+// sessionItem implements list.Item for session browser selection
+type sessionItem struct {
+	name      string
+	paneCount int
+}
+
+func (s sessionItem) Title() string       { return s.name }
+func (s sessionItem) Description() string { return fmt.Sprintf("%d pane(s)", s.paneCount) }
+func (s sessionItem) FilterValue() string { return s.name }
+
+// browserItem implements list.Item for pane browser selection
+type browserItem struct {
+	paneInfo tmux.PaneInfo
+}
+
+func (b browserItem) Title() string {
+	return fmt.Sprintf("%d.%d %s", b.paneInfo.Window, b.paneInfo.Pane, b.paneInfo.Command)
+}
+func (b browserItem) Description() string {
+	return b.paneInfo.ID
+}
+func (b browserItem) FilterValue() string { return b.paneInfo.ID }
+
+// configMenuItem represents a menu item in the configure popup
+type configMenuItem int
+
+const (
+	configMenuName configMenuItem = iota
+	configMenuSound
+	configMenuNotify
+)
 
 type Model struct {
 	list           list.Model
 	viewport       viewport.Model
 	textInput      textinput.Model
 	watchlist      *watchlist.Watchlist
+	monitor        *monitor.Monitor
+	paneStatuses   map[string]monitor.PaneStatus
 	empty          bool
 	loadErr        error
 	selectedPaneID string
@@ -84,6 +142,18 @@ type Model struct {
 	height         int
 	editing        bool
 	deleting       bool
+	notInTmuxMsg   bool
+	browsing        bool
+	browserList     list.Model
+	browserEmpty    bool
+	tickFrame       int
+	browsingSession bool              // true when showing sessions, false when showing panes
+	selectedSession string            // session name selected for pane browsing
+	allBrowserPanes []tmux.PaneInfo   // cached panes for filtering by session
+	configuring     bool              // true when configure popup is open
+	configMenuItem  configMenuItem    // selected menu item in configure popup
+	configEditingName bool            // true when editing name in configure popup
+	watchlistMtime  time.Time         // last known modification time of watchlist file
 }
 
 func New() Model {
@@ -92,9 +162,17 @@ func New() Model {
 		return Model{loadErr: err}
 	}
 
+	// Get initial mtime for watchlist file
+	var wlMtime time.Time
+	if path, err := watchlist.ConfigPath(); err == nil {
+		if info, err := os.Stat(path); err == nil {
+			wlMtime = info.ModTime()
+		}
+	}
+
 	items := make([]list.Item, len(wl.Panes))
 	for i, p := range wl.Panes {
-		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt}
+		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: monitor.Idle}
 	}
 
 	l := list.New(items, list.NewDefaultDelegate(), 30, 20)
@@ -111,11 +189,14 @@ func New() Model {
 	ti.CharLimit = 50
 
 	m := Model{
-		list:      l,
-		viewport:  vp,
-		textInput: ti,
-		watchlist: wl,
-		empty:     len(items) == 0,
+		list:           l,
+		viewport:       vp,
+		textInput:      ti,
+		watchlist:      wl,
+		monitor:        monitor.New(),
+		paneStatuses:   make(map[string]monitor.PaneStatus),
+		empty:          len(items) == 0,
+		watchlistMtime: wlMtime,
 	}
 
 	// Capture initial pane content if there are panes
@@ -157,9 +238,28 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle preview tick - refresh pane content periodically
 	if _, ok := msg.(previewTickMsg); ok {
-		// Skip refresh when in modal modes or no pane selected
-		if !m.editing && !m.deleting && !m.empty && m.selectedPaneID != "" {
-			m.captureSelectedPane()
+		m.tickFrame++
+		// Skip refresh when in modal modes
+		if !m.editing && !m.deleting && !m.browsing && !m.configuring {
+			// Check if watchlist file has been modified externally
+			m.checkWatchlistFileChange()
+
+			// Only refresh preview if we have a pane selected
+			if !m.empty && m.selectedPaneID != "" {
+				m.captureSelectedPane()
+				// Update status for selected pane
+				prevStatus := m.paneStatuses[m.selectedPaneID]
+				status := m.monitor.Update(m.selectedPaneID, m.previewContent)
+				if prevStatus != status {
+					m.paneStatuses[m.selectedPaneID] = status
+					// Check for Running -> Ready transition and trigger alerts
+					if prevStatus == monitor.Running && status == monitor.Ready {
+						m.triggerAlerts(m.selectedPaneID)
+					}
+				}
+				// Always refresh list to update spinner animation
+				m.refreshListWithFrame(m.tickFrame)
+			}
 		}
 		return m, tickCmd()
 	}
@@ -172,6 +272,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle delete confirmation mode
 	if m.deleting {
 		return m.updateDeleting(msg)
+	}
+
+	// Handle browsing mode
+	if m.browsing {
+		return m.updateBrowsing(msg)
+	}
+
+	// Handle configuring mode
+	if m.configuring {
+		return m.updateConfiguring(msg)
 	}
 
 	switch msg := msg.(type) {
@@ -194,6 +304,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleting = true
 				return m, nil
 			}
+		case "c":
+			if !m.empty && m.selectedPaneID != "" {
+				m.configuring = true
+				m.configMenuItem = configMenuName
+				m.configEditingName = false
+				return m, nil
+			}
+		case "enter":
+			if !m.empty && m.selectedPaneID != "" {
+				if tmux.IsInsideTmux() {
+					// Switch to the pane but keep app running
+					tmux.SwitchToPane(m.selectedPaneID)
+					return m, nil
+				}
+				// Show "not in tmux" message
+				m.notInTmuxMsg = true
+				return m, nil
+			}
+		case "esc":
+			// Clear any temporary messages
+			if m.notInTmuxMsg {
+				m.notInTmuxMsg = false
+				return m, nil
+			}
+		case "a":
+			// Open pane browser
+			m.loadBrowserPanes()
+			m.browsing = true
+			return m, nil
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -281,13 +420,287 @@ func (m Model) updateDeleting(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateBrowsing(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter":
+			if !m.browserEmpty {
+				if m.browsingSession {
+					// Session selected - show panes for this session
+					if item, ok := m.browserList.SelectedItem().(sessionItem); ok {
+						m.loadPaneListForSession(item.name)
+					}
+				} else {
+					// Pane selected - add to watchlist
+					if item, ok := m.browserList.SelectedItem().(browserItem); ok {
+						m.watchlist.Add(item.paneInfo.ID)
+						m.watchlist.Save()
+						m.refreshList()
+						m.empty = false
+						// Select the newly added pane
+						m.selectedPaneID = item.paneInfo.ID
+						m.captureSelectedPane()
+					}
+					m.browsing = false
+				}
+			}
+			return m, nil
+		case "esc":
+			if m.browsingSession {
+				// At session level - close browser
+				m.browsing = false
+			} else {
+				// At pane level - go back to session list
+				m.loadSessionList()
+			}
+			return m, nil
+		case "q":
+			// Always close browser
+			m.browsing = false
+			return m, nil
+		}
+	}
+
+	// Update browser list for navigation
+	var cmd tea.Cmd
+	m.browserList, cmd = m.browserList.Update(msg)
+	return m, cmd
+}
+
+func (m Model) updateConfiguring(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle name editing mode within configure popup
+	if m.configEditingName {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "enter":
+				// Save the new name
+				newName := m.textInput.Value()
+				m.watchlist.Rename(m.selectedPaneID, newName)
+				m.watchlist.Save()
+				m.refreshList()
+				m.configEditingName = false
+				m.textInput.Blur()
+				return m, nil
+			case "esc":
+				// Cancel name edit, stay in configure popup
+				m.configEditingName = false
+				m.textInput.Blur()
+				return m, nil
+			}
+		}
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		return m, cmd
+	}
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "k":
+			if m.configMenuItem > configMenuName {
+				m.configMenuItem--
+			}
+			return m, nil
+		case "down", "j":
+			if m.configMenuItem < configMenuNotify {
+				m.configMenuItem++
+			}
+			return m, nil
+		case "enter", " ":
+			pane := m.watchlist.GetPane(m.selectedPaneID)
+			if pane == nil {
+				return m, nil
+			}
+			switch m.configMenuItem {
+			case configMenuName:
+				// Enter name editing mode
+				m.configEditingName = true
+				m.textInput.SetValue(pane.Name)
+				m.textInput.Focus()
+				return m, textinput.Blink
+			case configMenuSound:
+				// Toggle sound
+				m.watchlist.SetSound(m.selectedPaneID, !pane.SoundOnReady)
+				m.watchlist.Save()
+				return m, nil
+			case configMenuNotify:
+				// Toggle notification
+				m.watchlist.SetNotify(m.selectedPaneID, !pane.NotifyOnReady)
+				m.watchlist.Save()
+				return m, nil
+			}
+		case "esc", "q":
+			m.configuring = false
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// checkWatchlistFileChange checks if the watchlist file has been modified
+// and reloads it if necessary, preserving the current selection when possible.
+func (m *Model) checkWatchlistFileChange() {
+	path, err := watchlist.ConfigPath()
+	if err != nil {
+		return
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+
+	currentMtime := info.ModTime()
+	if currentMtime.Equal(m.watchlistMtime) {
+		return
+	}
+
+	// File has changed - reload watchlist
+	newWl, err := watchlist.Load()
+	if err != nil {
+		return
+	}
+
+	// Store current selection
+	prevSelectedID := m.selectedPaneID
+
+	// Update model with new watchlist
+	m.watchlist = newWl
+	m.watchlistMtime = currentMtime
+	m.refreshList()
+
+	// Check if previous selection still exists
+	if m.watchlist.Contains(prevSelectedID) {
+		m.selectedPaneID = prevSelectedID
+	} else if len(m.watchlist.Panes) > 0 {
+		// Select first pane if previous selection was removed
+		m.selectedPaneID = m.watchlist.Panes[0].ID
+	} else {
+		m.selectedPaneID = ""
+		m.empty = true
+	}
+
+	// Update empty state
+	m.empty = len(m.watchlist.Panes) == 0
+
+	// Re-capture preview for selected pane
+	if m.selectedPaneID != "" {
+		m.captureSelectedPane()
+	}
+}
+
+func (m *Model) triggerAlerts(paneID string) {
+	pane := m.watchlist.GetPane(paneID)
+	if pane == nil {
+		return
+	}
+
+	if pane.SoundOnReady {
+		alerts.PlayBell()
+	}
+
+	if pane.NotifyOnReady {
+		displayName := pane.DisplayName()
+		alerts.SendNotification("Teejay", displayName+" is ready")
+	}
+}
+
 func (m *Model) refreshList() {
+	m.refreshListWithFrame(m.tickFrame)
+}
+
+func (m *Model) refreshListWithFrame(frame int) {
 	items := make([]list.Item, len(m.watchlist.Panes))
 	for i, p := range m.watchlist.Panes {
-		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt}
+		status := m.paneStatuses[p.ID]
+		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: status, frame: frame}
 	}
 	m.list.SetItems(items)
 	m.empty = len(items) == 0
+}
+
+func (m *Model) loadBrowserPanes() {
+	allPanes, err := tmux.ListAllPanes()
+	if err != nil {
+		m.browserEmpty = true
+		return
+	}
+
+	// Build set of already watched pane IDs
+	watched := make(map[string]bool)
+	for _, p := range m.watchlist.Panes {
+		watched[p.ID] = true
+	}
+
+	// Filter out already watched panes and cache them
+	m.allBrowserPanes = make([]tmux.PaneInfo, 0)
+	for _, p := range allPanes {
+		if !watched[p.ID] {
+			m.allBrowserPanes = append(m.allBrowserPanes, p)
+		}
+	}
+
+	// Start with session list
+	m.browsingSession = true
+	m.selectedSession = ""
+	m.loadSessionList()
+}
+
+func (m *Model) loadSessionList() {
+	// Count panes per session
+	sessionPanes := make(map[string]int)
+	for _, p := range m.allBrowserPanes {
+		sessionPanes[p.Session]++
+	}
+
+	// Build session items (preserve order from first pane appearance)
+	seen := make(map[string]bool)
+	items := make([]list.Item, 0)
+	for _, p := range m.allBrowserPanes {
+		if !seen[p.Session] {
+			seen[p.Session] = true
+			items = append(items, sessionItem{
+				name:      p.Session,
+				paneCount: sessionPanes[p.Session],
+			})
+		}
+	}
+
+	// Create session list
+	delegate := list.NewDefaultDelegate()
+	m.browserList = list.New(items, delegate, 50, 15)
+	m.browserList.Title = "Select Session"
+	m.browserList.SetShowStatusBar(false)
+	m.browserList.SetFilteringEnabled(false)
+	m.browserList.SetShowHelp(false)
+	m.browserList.Styles.Title = browserTitleStyle
+
+	m.browserEmpty = len(items) == 0
+}
+
+func (m *Model) loadPaneListForSession(sessionName string) {
+	// Filter panes for this session
+	items := make([]list.Item, 0)
+	for _, p := range m.allBrowserPanes {
+		if p.Session == sessionName {
+			items = append(items, browserItem{paneInfo: p})
+		}
+	}
+
+	// Create pane list
+	delegate := list.NewDefaultDelegate()
+	m.browserList = list.New(items, delegate, 50, 15)
+	m.browserList.Title = "Select Pane (" + sessionName + ")"
+	m.browserList.SetShowStatusBar(false)
+	m.browserList.SetFilteringEnabled(false)
+	m.browserList.SetShowHelp(false)
+	m.browserList.Styles.Title = browserTitleStyle
+
+	m.browsingSession = false
+	m.selectedSession = sessionName
+	m.browserEmpty = len(items) == 0
 }
 
 func (m Model) View() string {
@@ -295,11 +708,21 @@ func (m Model) View() string {
 		return fmt.Sprintf("Error loading watchlist: %v\n\nPress q to quit.\n", m.loadErr)
 	}
 
-	if m.empty {
-		return titleStyle.Render("tmon") + "\n\n" +
+	if m.empty && !m.browsing {
+		return titleStyle.Render("Teejay") + "\n\n" +
 			emptyStyle.Render("No panes are being watched.") + "\n\n" +
-			helpStyle.Render("Run 'tmon add' in a tmux pane to start watching it.") + "\n\n" +
+			helpStyle.Render("Press 'a' to browse and add panes, or run 'tj add' in a tmux pane.") + "\n\n" +
 			helpStyle.Render("Press q to quit.")
+	}
+
+	// Handle browsing popup
+	if m.browsing {
+		return m.renderBrowserPopup()
+	}
+
+	// Handle configure popup
+	if m.configuring {
+		return m.renderConfigurePopup()
 	}
 
 	// Calculate panel widths
@@ -345,9 +768,119 @@ func (m Model) View() string {
 			paneName = item.Title()
 		}
 		footer = errorStyle.Render(fmt.Sprintf("Delete %s? (y/n)", paneName))
+	} else if m.notInTmuxMsg {
+		footer = errorStyle.Render("Cannot switch: not running inside tmux") + "\n" + helpStyle.Render("Press Esc to dismiss")
 	} else {
-		footer = helpStyle.Render("↑/↓: navigate • e: edit • d: delete • q: quit")
+		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • a: add • c: configure • d: delete • q: quit")
 	}
 
 	return layout + "\n" + footer
+}
+
+func (m Model) renderBrowserPopup() string {
+	var content string
+	if m.browserEmpty {
+		if m.browsingSession {
+			content = emptyStyle.Render("No additional panes available.\nAll tmux panes are already being watched.")
+		} else {
+			content = emptyStyle.Render("No panes available in this session.")
+		}
+	} else {
+		content = m.browserList.View()
+	}
+
+	popup := browserPopupStyle.Render(content)
+
+	// Center the popup
+	centered := lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		popup,
+	)
+
+	// Add footer help - different for session vs pane selection
+	var footer string
+	if m.browsingSession {
+		footer = helpStyle.Render("↑/↓: navigate • Enter: select session • Esc: cancel")
+	} else {
+		footer = helpStyle.Render("↑/↓: navigate • Enter: add pane • Esc: back to sessions")
+	}
+
+	return centered + "\n" + footer
+}
+
+func (m Model) renderConfigurePopup() string {
+	pane := m.watchlist.GetPane(m.selectedPaneID)
+	if pane == nil {
+		return "Error: pane not found"
+	}
+
+	// Build menu items
+	var lines []string
+
+	// Title
+	displayName := pane.DisplayName()
+	lines = append(lines, browserTitleStyle.Render("Configure: "+displayName))
+	lines = append(lines, "")
+
+	// Name editing row
+	if m.configEditingName {
+		lines = append(lines, "Name: "+m.textInput.View())
+	} else {
+		nameValue := pane.Name
+		if nameValue == "" {
+			nameValue = emptyStyle.Render("(none)")
+		}
+		if m.configMenuItem == configMenuName {
+			lines = append(lines, "> Name: "+nameValue)
+		} else {
+			lines = append(lines, "  Name: "+nameValue)
+		}
+	}
+
+	// Sound toggle row
+	soundStatus := "[ ]"
+	if pane.SoundOnReady {
+		soundStatus = "[x]"
+	}
+	if m.configMenuItem == configMenuSound {
+		lines = append(lines, "> Sound on Ready: "+soundStatus)
+	} else {
+		lines = append(lines, "  Sound on Ready: "+soundStatus)
+	}
+
+	// Notification toggle row
+	notifyStatus := "[ ]"
+	if pane.NotifyOnReady {
+		notifyStatus = "[x]"
+	}
+	if m.configMenuItem == configMenuNotify {
+		lines = append(lines, "> Notify on Ready: "+notifyStatus)
+	} else {
+		lines = append(lines, "  Notify on Ready: "+notifyStatus)
+	}
+
+	content := ""
+	for _, line := range lines {
+		content += line + "\n"
+	}
+
+	popup := browserPopupStyle.Render(content)
+
+	// Center the popup
+	centered := lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		popup,
+	)
+
+	// Footer
+	var footer string
+	if m.configEditingName {
+		footer = helpStyle.Render("Enter: save • Esc: cancel")
+	} else {
+		footer = helpStyle.Render("↑/↓: navigate • Enter/Space: toggle/edit • Esc: close")
+	}
+
+	return centered + "\n" + footer
 }

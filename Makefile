@@ -6,8 +6,8 @@ help: ## Show this help
 test: ## Run all tests
 	go test ./...
 
-build: ## Build the tmon binary
-	go build -o tmon ./cmd/tmon
+build: ## Build the tj binary
+	go build -o tj ./cmd/tj
 
 lint: ## Run static analysis
 	go vet ./...

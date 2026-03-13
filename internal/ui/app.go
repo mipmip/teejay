@@ -285,6 +285,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		// Handle mouse clicks in the main pane list
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			// The list is rendered in the left panel with a 1-cell border
+			// List panel starts at x=0, items start after title (around y=3 accounting for border and title)
+			listWidth := m.width*30/100 - 2
+			if listWidth < 20 {
+				listWidth = 20
+			}
+			// Check if click is within the list panel area (accounting for border)
+			if msg.X >= 1 && msg.X <= listWidth+1 {
+				// Calculate which item was clicked
+				// List starts rendering items at y=3 (border + title + spacing)
+				// Each item takes 2 lines in the default delegate (title + description)
+				itemHeight := 2
+				headerOffset := 3 // border (1) + title (1) + spacing (1)
+
+				if msg.Y >= headerOffset {
+					clickedIndex := (msg.Y - headerOffset) / itemHeight
+					items := m.list.Items()
+					if clickedIndex >= 0 && clickedIndex < len(items) {
+						m.list.Select(clickedIndex)
+						// Update selection
+						if item, ok := m.list.SelectedItem().(paneItem); ok {
+							if item.id != m.selectedPaneID {
+								m.selectedPaneID = item.id
+								m.captureSelectedPane()
+							}
+						}
+					}
+				}
+			}
+		}
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -422,6 +455,34 @@ func (m Model) updateDeleting(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateBrowsing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		// Handle mouse clicks in the browser popup list
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			// The popup is centered, we need to calculate its position
+			// Popup is approximately 54 wide (50 + padding) and 19 tall (15 + padding + border)
+			popupWidth := 54
+			popupHeight := 19
+			popupX := (m.width - popupWidth) / 2
+			popupY := (m.height - popupHeight) / 2
+
+			// Check if click is within the popup
+			if msg.X >= popupX && msg.X < popupX+popupWidth &&
+				msg.Y >= popupY && msg.Y < popupY+popupHeight {
+				// Calculate which item was clicked
+				// Items start after border (1) + padding (1) + title (1) + spacing (1) = 4
+				itemHeight := 2 // title + description
+				headerOffset := 4
+
+				relativeY := msg.Y - popupY
+				if relativeY >= headerOffset {
+					clickedIndex := (relativeY - headerOffset) / itemHeight
+					items := m.browserList.Items()
+					if clickedIndex >= 0 && clickedIndex < len(items) {
+						m.browserList.Select(clickedIndex)
+					}
+				}
+			}
+		}
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "enter":
@@ -496,6 +557,34 @@ func (m Model) updateConfiguring(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		// Handle mouse clicks in the configure popup menu
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			// The popup is centered, calculate its approximate position
+			// Configure popup is approximately 40 wide and 10 tall
+			popupWidth := 40
+			popupHeight := 10
+			popupX := (m.width - popupWidth) / 2
+			popupY := (m.height - popupHeight) / 2
+
+			// Check if click is within the popup
+			if msg.X >= popupX && msg.X < popupX+popupWidth &&
+				msg.Y >= popupY && msg.Y < popupY+popupHeight {
+				// Calculate which menu item was clicked
+				// Items: title (line 0), blank (line 1), Name (line 2), Sound (line 3), Notify (line 4)
+				// Accounting for border (1) + padding (1) = 2 offset
+				relativeY := msg.Y - popupY - 2
+
+				switch relativeY {
+				case 2: // Name row
+					m.configMenuItem = configMenuName
+				case 3: // Sound row
+					m.configMenuItem = configMenuSound
+				case 4: // Notify row
+					m.configMenuItem = configMenuNotify
+				}
+			}
+		}
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":

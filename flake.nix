@@ -18,10 +18,13 @@
         {
           default = pkgs.buildGoModule rec {
             pname = "tj";
-            version = "0.1.0";
+            version = builtins.replaceStrings ["\n"] [""] (builtins.readFile ./VERSION);
 
             src = ./.;
             vendorHash = "sha256-yAmydoJZXlipqhZsjojoPA3uoI8BhaU4sPzs9OZ1+3w=";
+
+            nativeBuildInputs = with pkgs; [ pkg-config ];
+            buildInputs = with pkgs; pkgs.lib.optionals pkgs.stdenv.isLinux [ alsa-lib ];
 
             subPackages = [ "cmd/tj" ];
 
@@ -59,7 +62,9 @@
               gotools
               go-tools
               goreleaser
-            ];
+              # Audio dependencies for native sound support (Linux only)
+              pkg-config
+            ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ alsa-lib ];
 
             shellHook = ''
               echo "Teejay development environment"

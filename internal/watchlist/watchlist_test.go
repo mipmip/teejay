@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"tj/internal/config"
 )
 
 func TestLoadNonExistent(t *testing.T) {
@@ -231,18 +233,26 @@ func TestSetSound(t *testing.T) {
 		},
 	}
 
-	wl.SetSound("%1", true)
+	tr := true
+	wl.SetSound("%1", &tr)
 
-	if !wl.Panes[1].SoundOnReady {
+	if wl.Panes[1].SoundOnReady == nil || !*wl.Panes[1].SoundOnReady {
 		t.Error("SetSound(%1, true) did not set SoundOnReady")
 	}
-	if wl.Panes[0].SoundOnReady {
+	if wl.Panes[0].SoundOnReady != nil {
 		t.Error("SetSound() changed wrong pane")
 	}
 
-	wl.SetSound("%1", false)
-	if wl.Panes[1].SoundOnReady {
+	fl := false
+	wl.SetSound("%1", &fl)
+	if wl.Panes[1].SoundOnReady == nil || *wl.Panes[1].SoundOnReady {
 		t.Error("SetSound(%1, false) did not unset SoundOnReady")
+	}
+
+	// Test clearing to nil (use default)
+	wl.SetSound("%1", nil)
+	if wl.Panes[1].SoundOnReady != nil {
+		t.Error("SetSound(%1, nil) did not clear SoundOnReady")
 	}
 }
 
@@ -254,18 +264,26 @@ func TestSetNotify(t *testing.T) {
 		},
 	}
 
-	wl.SetNotify("%0", true)
+	tr := true
+	wl.SetNotify("%0", &tr)
 
-	if !wl.Panes[0].NotifyOnReady {
+	if wl.Panes[0].NotifyOnReady == nil || !*wl.Panes[0].NotifyOnReady {
 		t.Error("SetNotify(%0, true) did not set NotifyOnReady")
 	}
-	if wl.Panes[1].NotifyOnReady {
+	if wl.Panes[1].NotifyOnReady != nil {
 		t.Error("SetNotify() changed wrong pane")
 	}
 
-	wl.SetNotify("%0", false)
-	if wl.Panes[0].NotifyOnReady {
+	fl := false
+	wl.SetNotify("%0", &fl)
+	if wl.Panes[0].NotifyOnReady == nil || *wl.Panes[0].NotifyOnReady {
 		t.Error("SetNotify(%0, false) did not unset NotifyOnReady")
+	}
+
+	// Test clearing to nil (use default)
+	wl.SetNotify("%0", nil)
+	if wl.Panes[0].NotifyOnReady != nil {
+		t.Error("SetNotify(%0, nil) did not clear NotifyOnReady")
 	}
 }
 
@@ -303,8 +321,9 @@ func TestAlertFieldsPersistence(t *testing.T) {
 
 	wl := &Watchlist{}
 	wl.Add("%0")
-	wl.SetSound("%0", true)
-	wl.SetNotify("%0", true)
+	tr := true
+	wl.SetSound("%0", &tr)
+	wl.SetNotify("%0", &tr)
 
 	if err := wl.Save(); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -315,10 +334,10 @@ func TestAlertFieldsPersistence(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if !loaded.Panes[0].SoundOnReady {
+	if loaded.Panes[0].SoundOnReady == nil || !*loaded.Panes[0].SoundOnReady {
 		t.Error("SoundOnReady not persisted")
 	}
-	if !loaded.Panes[0].NotifyOnReady {
+	if loaded.Panes[0].NotifyOnReady == nil || !*loaded.Panes[0].NotifyOnReady {
 		t.Error("NotifyOnReady not persisted")
 	}
 }
@@ -360,5 +379,193 @@ func TestAddWithNamePersistence(t *testing.T) {
 
 	if loaded.Panes[0].Name != "nvim-editor" {
 		t.Errorf("Name not persisted: got %q, want 'nvim-editor'", loaded.Panes[0].Name)
+	}
+}
+
+func TestGetEffectiveSound(t *testing.T) {
+	cfg := config.Default()
+
+	// Pane with no override - use global default (false)
+	pane := &Pane{ID: "%0"}
+	if pane.GetEffectiveSound(cfg) {
+		t.Error("expected false when no override and default is false")
+	}
+
+	// Change global default to true
+	cfg.Alerts.SoundOnReady = true
+	if !pane.GetEffectiveSound(cfg) {
+		t.Error("expected true when no override and default is true")
+	}
+
+	// Pane with explicit false override
+	fl := false
+	pane.SoundOnReady = &fl
+	if pane.GetEffectiveSound(cfg) {
+		t.Error("expected false when override is false (regardless of default)")
+	}
+
+	// Pane with explicit true override
+	tr := true
+	pane.SoundOnReady = &tr
+	cfg.Alerts.SoundOnReady = false // default is now false
+	if !pane.GetEffectiveSound(cfg) {
+		t.Error("expected true when override is true (regardless of default)")
+	}
+}
+
+func TestGetEffectiveNotify(t *testing.T) {
+	cfg := config.Default()
+
+	// Pane with no override - use global default (false)
+	pane := &Pane{ID: "%0"}
+	if pane.GetEffectiveNotify(cfg) {
+		t.Error("expected false when no override and default is false")
+	}
+
+	// Change global default to true
+	cfg.Alerts.NotifyOnReady = true
+	if !pane.GetEffectiveNotify(cfg) {
+		t.Error("expected true when no override and default is true")
+	}
+
+	// Pane with explicit false override
+	fl := false
+	pane.NotifyOnReady = &fl
+	if pane.GetEffectiveNotify(cfg) {
+		t.Error("expected false when override is false (regardless of default)")
+	}
+
+	// Pane with explicit true override
+	tr := true
+	pane.NotifyOnReady = &tr
+	cfg.Alerts.NotifyOnReady = false // default is now false
+	if !pane.GetEffectiveNotify(cfg) {
+		t.Error("expected true when override is true (regardless of default)")
+	}
+}
+
+func TestSetSoundType(t *testing.T) {
+	wl := &Watchlist{
+		Panes: []Pane{
+			{ID: "%0"},
+			{ID: "%1"},
+		},
+	}
+
+	chime := "chime"
+	wl.SetSoundType("%1", &chime)
+
+	if wl.Panes[1].SoundType == nil || *wl.Panes[1].SoundType != "chime" {
+		t.Error("SetSoundType(%1, chime) did not set SoundType")
+	}
+	if wl.Panes[0].SoundType != nil {
+		t.Error("SetSoundType() changed wrong pane")
+	}
+
+	bell := "bell"
+	wl.SetSoundType("%1", &bell)
+	if wl.Panes[1].SoundType == nil || *wl.Panes[1].SoundType != "bell" {
+		t.Error("SetSoundType(%1, bell) did not update SoundType")
+	}
+
+	// Test clearing to nil (use default)
+	wl.SetSoundType("%1", nil)
+	if wl.Panes[1].SoundType != nil {
+		t.Error("SetSoundType(%1, nil) did not clear SoundType")
+	}
+}
+
+func TestGetEffectiveSoundType(t *testing.T) {
+	cfg := config.Default()
+	cfg.Alerts.SoundType = "chime"
+
+	// Pane with no override - use global default
+	pane := &Pane{ID: "%0"}
+	if pane.GetEffectiveSoundType(cfg) != "chime" {
+		t.Errorf("expected chime when no override, got %s", pane.GetEffectiveSoundType(cfg))
+	}
+
+	// Change global default
+	cfg.Alerts.SoundType = "bell"
+	if pane.GetEffectiveSoundType(cfg) != "bell" {
+		t.Errorf("expected bell when no override and default is bell, got %s", pane.GetEffectiveSoundType(cfg))
+	}
+
+	// Pane with explicit override
+	ping := "ping"
+	pane.SoundType = &ping
+	if pane.GetEffectiveSoundType(cfg) != "ping" {
+		t.Errorf("expected ping when override is ping, got %s", pane.GetEffectiveSoundType(cfg))
+	}
+
+	// Pane with empty string override - should use default
+	empty := ""
+	pane.SoundType = &empty
+	if pane.GetEffectiveSoundType(cfg) != "bell" {
+		t.Errorf("expected bell when override is empty string, got %s", pane.GetEffectiveSoundType(cfg))
+	}
+}
+
+func TestSoundTypePersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	wl := &Watchlist{}
+	wl.Add("%0")
+	ding := "ding"
+	wl.SetSoundType("%0", &ding)
+
+	if err := wl.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if loaded.Panes[0].SoundType == nil || *loaded.Panes[0].SoundType != "ding" {
+		t.Error("SoundType not persisted")
+	}
+}
+
+func TestBackwardCompatibilityWithOldWatchlistJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	// Create config directory
+	configDir := filepath.Join(tmpDir, ".config", "teejay")
+	os.MkdirAll(configDir, 0755)
+
+	// Simulate old watchlist.json with bool values (not pointers)
+	// When JSON has "sound_on_ready": false, Go's json.Unmarshal will set *bool to nil
+	// When JSON has "sound_on_ready": true, Go's json.Unmarshal will set *bool to &true
+	oldJSON := `{
+  "panes": [
+    {"id": "%0", "added_at": "2024-01-01T00:00:00Z"},
+    {"id": "%1", "added_at": "2024-01-01T00:00:00Z", "sound_on_ready": true},
+    {"id": "%2", "added_at": "2024-01-01T00:00:00Z", "sound_on_ready": false}
+  ]
+}`
+	os.WriteFile(filepath.Join(configDir, "watchlist.json"), []byte(oldJSON), 0644)
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// Pane with no field should have nil (use default)
+	if loaded.Panes[0].SoundOnReady != nil {
+		t.Error("expected nil for pane without sound_on_ready field")
+	}
+
+	// Pane with true should have *true
+	if loaded.Panes[1].SoundOnReady == nil || !*loaded.Panes[1].SoundOnReady {
+		t.Error("expected *true for pane with sound_on_ready: true")
+	}
+
+	// Pane with false should have *false (explicit override)
+	if loaded.Panes[2].SoundOnReady == nil || *loaded.Panes[2].SoundOnReady {
+		t.Error("expected *false for pane with sound_on_ready: false")
 	}
 }

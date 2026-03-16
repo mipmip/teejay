@@ -71,21 +71,21 @@ func TestSplitPanelLayoutWithPanes(t *testing.T) {
 	}
 }
 
-func TestNotInTmuxMessageState(t *testing.T) {
+func TestTemporaryMessageState(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
 	m := New("test")
 
-	// Initially notInTmuxMsg should be false
-	if m.notInTmuxMsg {
-		t.Error("notInTmuxMsg should initially be false")
+	// Initially temporaryMessage should be empty
+	if m.temporaryMessage != "" {
+		t.Error("temporaryMessage should initially be empty")
 	}
 
 	// Test that the state field exists and can be set
-	m.notInTmuxMsg = true
-	if !m.notInTmuxMsg {
-		t.Error("notInTmuxMsg should be settable to true")
+	m.temporaryMessage = "Test error message"
+	if m.temporaryMessage != "Test error message" {
+		t.Error("temporaryMessage should be settable")
 	}
 }
 
@@ -97,8 +97,8 @@ func TestFooterIncludesEnterKeybinding(t *testing.T) {
 	// The empty state shows different footer, so we check the model has the right structure
 	// For non-empty state, footer would include "Enter: switch"
 	// This is a structural test since we can't easily create panes in test
-	if m.editing || m.deleting || m.notInTmuxMsg {
-		t.Error("Model should initialize with all modal states false")
+	if m.editing || m.deleting || m.temporaryMessage != "" {
+		t.Error("Model should initialize with all modal states false/empty")
 	}
 }
 
@@ -150,8 +150,11 @@ func TestConfigMenuItemConstants(t *testing.T) {
 	if configMenuSound != 1 {
 		t.Error("configMenuSound should be 1")
 	}
-	if configMenuNotify != 2 {
-		t.Error("configMenuNotify should be 2")
+	if configMenuSoundType != 2 {
+		t.Error("configMenuSoundType should be 2")
+	}
+	if configMenuNotify != 3 {
+		t.Error("configMenuNotify should be 3")
 	}
 }
 
@@ -282,5 +285,58 @@ func TestStatusMessageClearsOnKeyPress(t *testing.T) {
 
 	if m.statusMessage != "" {
 		t.Errorf("statusMessage should be cleared on key press, got: %q", m.statusMessage)
+	}
+}
+
+func TestPreviewTitleShowsCustomPaneName(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	m := New("test")
+
+	// Add a pane with a custom name
+	m.watchlist.AddWithName("%10", "My Project")
+	m.watchlist.Save()
+	m.refreshList()
+	m.empty = false
+	m.selectedPaneID = "%10"
+
+	// Set reasonable dimensions for rendering
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+
+	// Preview title should show the custom name, not the pane ID
+	if !strings.Contains(view, "Preview: My Project") {
+		t.Errorf("Preview title should show custom name 'My Project', got view containing: %q", view)
+	}
+	if strings.Contains(view, "Preview: %10") {
+		t.Error("Preview title should NOT show pane ID when custom name exists")
+	}
+}
+
+func TestPreviewTitleFallsBackToPaneID(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	m := New("test")
+
+	// Add a pane without a custom name
+	m.watchlist.Add("%20")
+	m.watchlist.Save()
+	m.refreshList()
+	m.empty = false
+	m.selectedPaneID = "%20"
+
+	// Set reasonable dimensions for rendering
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+
+	// Preview title should show the pane ID as fallback
+	if !strings.Contains(view, "Preview: %20") {
+		t.Errorf("Preview title should show pane ID '%%20' when no custom name, got view containing: %q", view)
 	}
 }

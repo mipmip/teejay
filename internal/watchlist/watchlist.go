@@ -5,14 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"tj/internal/config"
 )
 
 type Pane struct {
 	ID            string    `json:"id"`
 	Name          string    `json:"name,omitempty"`
 	AddedAt       time.Time `json:"added_at"`
-	SoundOnReady  bool      `json:"sound_on_ready,omitempty"`
-	NotifyOnReady bool      `json:"notify_on_ready,omitempty"`
+	SoundOnReady  *bool     `json:"sound_on_ready,omitempty"`
+	NotifyOnReady *bool     `json:"notify_on_ready,omitempty"`
+	SoundType     *string   `json:"sound_type,omitempty"`
 }
 
 // DisplayName returns the custom name if set, otherwise the pane ID.
@@ -143,7 +146,8 @@ func (wl *Watchlist) Rename(paneID, name string) {
 }
 
 // SetSound sets the SoundOnReady flag for a pane by ID.
-func (wl *Watchlist) SetSound(paneID string, enabled bool) {
+// Pass nil to clear the override and use the global default.
+func (wl *Watchlist) SetSound(paneID string, enabled *bool) {
 	for i := range wl.Panes {
 		if wl.Panes[i].ID == paneID {
 			wl.Panes[i].SoundOnReady = enabled
@@ -153,7 +157,8 @@ func (wl *Watchlist) SetSound(paneID string, enabled bool) {
 }
 
 // SetNotify sets the NotifyOnReady flag for a pane by ID.
-func (wl *Watchlist) SetNotify(paneID string, enabled bool) {
+// Pass nil to clear the override and use the global default.
+func (wl *Watchlist) SetNotify(paneID string, enabled *bool) {
 	for i := range wl.Panes {
 		if wl.Panes[i].ID == paneID {
 			wl.Panes[i].NotifyOnReady = enabled
@@ -170,4 +175,42 @@ func (wl *Watchlist) GetPane(paneID string) *Pane {
 		}
 	}
 	return nil
+}
+
+// GetEffectiveSound returns whether sound alerts should be used for a pane,
+// considering the pane's override and the global default.
+func (p *Pane) GetEffectiveSound(cfg *config.Config) bool {
+	if p.SoundOnReady != nil {
+		return *p.SoundOnReady
+	}
+	return cfg.Alerts.SoundOnReady
+}
+
+// GetEffectiveNotify returns whether desktop notifications should be used for a pane,
+// considering the pane's override and the global default.
+func (p *Pane) GetEffectiveNotify(cfg *config.Config) bool {
+	if p.NotifyOnReady != nil {
+		return *p.NotifyOnReady
+	}
+	return cfg.Alerts.NotifyOnReady
+}
+
+// GetEffectiveSoundType returns the sound type to use for a pane,
+// considering the pane's override and the global default.
+func (p *Pane) GetEffectiveSoundType(cfg *config.Config) string {
+	if p.SoundType != nil && *p.SoundType != "" {
+		return *p.SoundType
+	}
+	return cfg.Alerts.SoundType
+}
+
+// SetSoundType sets the sound type override for a pane by ID.
+// Pass nil to clear the override and use the global default.
+func (wl *Watchlist) SetSoundType(paneID string, soundType *string) {
+	for i := range wl.Panes {
+		if wl.Panes[i].ID == paneID {
+			wl.Panes[i].SoundType = soundType
+			return
+		}
+	}
 }

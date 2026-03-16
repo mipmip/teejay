@@ -1,28 +1,23 @@
 package alerts
 
 import (
-	"bytes"
-	"os"
 	"testing"
 )
 
 func TestPlayBell(t *testing.T) {
-	// Capture stdout to verify bell character is written
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
+	// PlayBell now uses native sound playback (via sounds.PlaySound)
+	// This is a smoke test - actual audio is system-dependent
+	// If we get here without panicking, the test passes
 	PlayBell()
+}
 
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	buf.ReadFrom(r)
-
-	if buf.String() != "\a" {
-		t.Errorf("PlayBell() output = %q, want %q", buf.String(), "\a")
-	}
+func TestPlaySound(t *testing.T) {
+	// PlaySound uses native sound playback
+	// This is a smoke test - actual audio is system-dependent
+	// If we get here without panicking, the test passes
+	PlaySound("chime")
+	PlaySound("bell")
+	PlaySound("invalid") // should fall back gracefully
 }
 
 func TestSendNotification(t *testing.T) {

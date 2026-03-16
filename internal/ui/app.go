@@ -15,6 +15,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"tj/internal/alerts"
+	"tj/internal/alerts/sounds"
+	"tj/internal/config"
 	"tj/internal/monitor"
 	"tj/internal/naming"
 	"tj/internal/tmux"
@@ -133,11 +135,27 @@ func (d browserItemDelegate) Render(w io.Writer, m list.Model, index int, item l
 // previewTickMsg is sent periodically to trigger preview refresh
 type previewTickMsg struct{}
 
+// dismissTemporaryMsg is sent to auto-dismiss temporary messages after timeout
+type dismissTemporaryMsg struct{}
+
 // tickCmd returns a command that sends a previewTickMsg after 100ms
 func tickCmd() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 		return previewTickMsg{}
 	})
+}
+
+// dismissTemporaryCmd returns a command that sends a dismissTemporaryMsg after 3 seconds
+func dismissTemporaryCmd() tea.Cmd {
+	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+		return dismissTemporaryMsg{}
+	})
+}
+
+// showTemporaryMessage sets a temporary message and returns the dismiss command
+func (m *Model) showTemporaryMessage(msg string) tea.Cmd {
+	m.temporaryMessage = msg
+	return dismissTemporaryCmd()
 }
 
 // paneItem implements list.Item for watchlist panes
@@ -202,8 +220,37 @@ type configMenuItem int
 const (
 	configMenuName configMenuItem = iota
 	configMenuSound
+	configMenuSoundType
 	configMenuNotify
 )
+
+// cycleTriState cycles through: nil (default) → true → false → nil
+func cycleTriState(current *bool) *bool {
+	if current == nil {
+		t := true
+		return &t
+	}
+	if *current {
+		f := false
+		return &f
+	}
+	return nil
+}
+
+// triStateIndicator returns a display string for a tri-state setting.
+// [D:x] = using default (shown as x or blank), [x] = explicitly enabled, [ ] = explicitly disabled
+func triStateIndicator(override *bool, defaultVal bool) string {
+	if override == nil {
+		if defaultVal {
+			return "[D:x]"
+		}
+		return "[D: ]"
+	}
+	if *override {
+		return "[x]"
+	}
+	return "[ ]"
+}
 
 type Model struct {
 	list           list.Model
@@ -211,6 +258,7 @@ type Model struct {
 	textInput      textinput.Model
 	watchlist      *watchlist.Watchlist
 	monitor        *monitor.Monitor
+	config         *config.Config
 	paneStatuses   map[string]monitor.PaneStatus
 	paneCommands   map[string]string // current foreground command per pane
 	empty          bool
@@ -221,16 +269,18 @@ type Model struct {
 	width          int
 	height         int
 	panelHeight    int
-	editing        bool
-	deleting       bool
-	notInTmuxMsg   bool
-	browsing        bool
+	editing          bool
+	deleting         bool
+	temporaryMessage string // auto-dismissing error/status message
+	browsing         bool
 	browserList     list.Model
 	browserEmpty    bool
 	tickFrame       int
-	browsingSession bool              // true when showing sessions, false when showing panes
-	selectedSession string            // session name selected for pane browsing
-	allBrowserPanes []tmux.PaneInfo   // cached panes for filtering by session
+	browsingSession       bool              // true when showing sessions, false when showing panes
+	selectedSession       string            // session name selected for pane browsing
+	allBrowserPanes       []tmux.PaneInfo   // cached panes for filtering by session
+	browserPreviewContent string            // preview content for selected browser pane
+	browserPreviewErr     error             // error from capturing browser preview
 	configuring     bool              // true when configure popup is open
 	configMenuItem  configMenuItem    // selected menu item in configure popup
 	configEditingName bool            // true when editing name in configure popup
@@ -273,12 +323,16 @@ func New(version string) Model {
 	ti.Placeholder = "Enter name..."
 	ti.CharLimit = 50
 
+	// Load configuration
+	cfg := config.Load()
+
 	m := Model{
 		list:           l,
 		viewport:       vp,
 		textInput:      ti,
 		watchlist:      wl,
-		monitor:        monitor.New(),
+		monitor:        monitor.New(cfg),
+		config:         cfg,
 		paneStatuses:   make(map[string]monitor.PaneStatus),
 		paneCommands:   make(map[string]string),
 		empty:          len(items) == 0,
@@ -328,6 +382,31 @@ func (m *Model) captureSelectedPane() {
 	m.viewport.SetContent(m.previewContent)
 }
 
+// captureBrowserPreview captures pane content for the currently selected browser item.
+func (m *Model) captureBrowserPreview() {
+	if m.browsingSession || m.browserEmpty {
+		m.browserPreviewContent = ""
+		m.browserPreviewErr = nil
+		return
+	}
+
+	item, ok := m.browserList.SelectedItem().(browserItem)
+	if !ok {
+		m.browserPreviewContent = ""
+		m.browserPreviewErr = nil
+		return
+	}
+
+	content, err := tmux.CapturePane(item.paneInfo.ID)
+	if err != nil {
+		m.browserPreviewErr = err
+		m.browserPreviewContent = ""
+	} else {
+		m.browserPreviewErr = nil
+		m.browserPreviewContent = content
+	}
+}
+
 // removeStalePane removes a pane that no longer exists in tmux from the watchlist
 func (m *Model) removeStalePane(paneID string) {
 	m.statusMessage = fmt.Sprintf("Removed stale pane %s", paneID)
@@ -361,6 +440,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMessage = ""
 	}
 
+	// Handle auto-dismiss of temporary messages
+	if _, ok := msg.(dismissTemporaryMsg); ok {
+		m.temporaryMessage = ""
+		return m, nil
+	}
+
 	// Handle preview tick - refresh pane content periodically
 	if _, ok := msg.(previewTickMsg); ok {
 		m.tickFrame++
@@ -380,19 +465,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Check if watchlist file has been modified externally
 			m.checkWatchlistFileChange()
 
-			// Only refresh preview if we have a pane selected
-			if !m.empty && m.selectedPaneID != "" {
-				m.captureSelectedPane()
-				// Update status for selected pane
-				prevStatus := m.paneStatuses[m.selectedPaneID]
-				status := m.monitor.Update(m.selectedPaneID, m.previewContent)
-				if prevStatus != status {
-					m.paneStatuses[m.selectedPaneID] = status
-					// Check for Busy -> Waiting transition and trigger alerts
-					if prevStatus == monitor.Busy && status == monitor.Waiting {
-						m.triggerAlerts(m.selectedPaneID)
+			if !m.empty {
+				// Update status for ALL panes in the watchlist
+				for _, p := range m.watchlist.Panes {
+					content, err := tmux.CapturePane(p.ID)
+					if err != nil {
+						if isStalePaneError(err) {
+							m.removeStalePane(p.ID)
+							continue
+						}
+						continue
+					}
+
+					// Get app name for this pane
+					appName := m.paneCommands[p.ID]
+
+					// Update status
+					prevStatus := m.paneStatuses[p.ID]
+					status := m.monitor.Update(p.ID, content, appName)
+					if prevStatus != status {
+						m.paneStatuses[p.ID] = status
+						// Check for Busy -> Waiting transition and trigger alerts
+						if prevStatus == monitor.Busy && status == monitor.Waiting {
+							m.triggerAlerts(p.ID)
+						}
+					}
+
+					// Update preview content if this is the selected pane
+					if p.ID == m.selectedPaneID {
+						m.previewContent = content
+						m.previewErr = nil
+						m.viewport.SetContent(m.previewContent)
 					}
 				}
+
 				// Always refresh list to update spinner animation
 				m.refreshListWithFrame(m.tickFrame)
 			}
@@ -487,14 +593,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					tmux.SwitchToPane(m.selectedPaneID)
 					return m, nil
 				}
-				// Show "not in tmux" message
-				m.notInTmuxMsg = true
-				return m, nil
+				// Show "not in tmux" message with auto-dismiss
+				return m, m.showTemporaryMessage("Cannot switch: not running inside tmux")
 			}
 		case "esc":
 			// Clear any temporary messages
-			if m.notInTmuxMsg {
-				m.notInTmuxMsg = false
+			if m.temporaryMessage != "" {
+				m.temporaryMessage = ""
 				return m, nil
 			}
 		case "a":
@@ -662,9 +767,18 @@ func (m Model) updateBrowsing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Track selection before update to detect navigation changes
+	prevIndex := m.browserList.Index()
+
 	// Update browser list for navigation
 	var cmd tea.Cmd
 	m.browserList, cmd = m.browserList.Update(msg)
+
+	// If selection changed and viewing panes, update preview
+	if !m.browsingSession && m.browserList.Index() != prevIndex {
+		m.captureBrowserPreview()
+	}
+
 	return m, cmd
 }
 
@@ -710,7 +824,7 @@ func (m Model) updateConfiguring(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.X >= popupX && msg.X < popupX+popupWidth &&
 				msg.Y >= popupY && msg.Y < popupY+popupHeight {
 				// Calculate which menu item was clicked
-				// Items: title (line 0), blank (line 1), Name (line 2), Sound (line 3), Notify (line 4)
+				// Items: title (line 0), blank (line 1), Name (line 2), Sound (line 3), SoundType (line 4), Notify (line 5)
 				// Accounting for border (1) + padding (1) = 2 offset
 				relativeY := msg.Y - popupY - 2
 
@@ -719,7 +833,9 @@ func (m Model) updateConfiguring(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.configMenuItem = configMenuName
 				case 3: // Sound row
 					m.configMenuItem = configMenuSound
-				case 4: // Notify row
+				case 4: // Sound Type row
+					m.configMenuItem = configMenuSoundType
+				case 5: // Notify row
 					m.configMenuItem = configMenuNotify
 				}
 			}
@@ -749,13 +865,21 @@ func (m Model) updateConfiguring(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textInput.Focus()
 				return m, textinput.Blink
 			case configMenuSound:
-				// Toggle sound
-				m.watchlist.SetSound(m.selectedPaneID, !pane.SoundOnReady)
+				// Cycle sound: default → enabled → disabled → default
+				m.watchlist.SetSound(m.selectedPaneID, cycleTriState(pane.SoundOnReady))
 				m.watchlist.Save()
 				return m, nil
+			case configMenuSoundType:
+				// Cycle sound type: chime → bell → ping → pop → ding → chime
+				currentType := pane.GetEffectiveSoundType(m.config)
+				nextType := sounds.NextSound(currentType)
+				m.watchlist.SetSoundType(m.selectedPaneID, &nextType)
+				m.watchlist.Save()
+				alerts.PlaySound(nextType)
+				return m, nil
 			case configMenuNotify:
-				// Toggle notification
-				m.watchlist.SetNotify(m.selectedPaneID, !pane.NotifyOnReady)
+				// Cycle notification: default → enabled → disabled → default
+				m.watchlist.SetNotify(m.selectedPaneID, cycleTriState(pane.NotifyOnReady))
 				m.watchlist.Save()
 				return m, nil
 			}
@@ -825,11 +949,12 @@ func (m *Model) triggerAlerts(paneID string) {
 		return
 	}
 
-	if pane.SoundOnReady {
-		alerts.PlayBell()
+	if pane.GetEffectiveSound(m.config) {
+		soundType := pane.GetEffectiveSoundType(m.config)
+		alerts.PlaySound(soundType)
 	}
 
-	if pane.NotifyOnReady {
+	if pane.GetEffectiveNotify(m.config) {
 		displayName := pane.DisplayName()
 		alerts.SendNotification("Teejay", displayName+" is ready")
 	}
@@ -938,6 +1063,9 @@ func (m *Model) loadPaneListForSession(sessionName string) {
 	m.browsingSession = false
 	m.selectedSession = sessionName
 	m.browserEmpty = len(items) == 0
+
+	// Capture preview for first pane
+	m.captureBrowserPreview()
 }
 
 func (m Model) View() string {
@@ -987,7 +1115,12 @@ func (m Model) View() string {
 		previewContent = m.viewport.View()
 	}
 
-	previewTitle := previewTitleStyle.Render("Preview: " + m.selectedPaneID)
+	// Get display name from selected pane item, fallback to pane ID
+	previewName := m.selectedPaneID
+	if item, ok := m.list.SelectedItem().(paneItem); ok {
+		previewName = item.Title()
+	}
+	previewTitle := previewTitleStyle.Render("Preview: " + previewName)
 	previewPanel := previewPanelStyle.
 		Width(previewWidth).
 		Render(previewTitle + "\n" + previewContent)
@@ -1005,8 +1138,8 @@ func (m Model) View() string {
 			paneName = item.Title()
 		}
 		footer = errorStyle.Render(fmt.Sprintf("Delete %s? (y/n)", paneName))
-	} else if m.notInTmuxMsg {
-		footer = errorStyle.Render("Cannot switch: not running inside tmux") + "\n" + helpStyle.Render("Press Esc to dismiss")
+	} else if m.temporaryMessage != "" {
+		footer = errorStyle.Render(m.temporaryMessage) + "\n" + helpStyle.Render("Press Esc to dismiss")
 	} else if m.statusMessage != "" {
 		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • a: add • c: configure • d: delete • q: quit")
 	} else {
@@ -1065,18 +1198,74 @@ func (m Model) renderBrandingFooter() string {
 }
 
 func (m Model) renderBrowserPopup() string {
-	var content string
-	if m.browserEmpty {
-		if m.browsingSession {
+	var popup string
+
+	// Session list: single panel layout
+	if m.browsingSession {
+		var content string
+		if m.browserEmpty {
 			content = emptyStyle.Render("No additional panes available.\nAll tmux panes are already being watched.")
 		} else {
-			content = emptyStyle.Render("No panes available in this session.")
+			content = m.browserList.View()
 		}
+		popup = browserPopupStyle.Render(content)
 	} else {
-		content = m.browserList.View()
-	}
+		// Pane list: split layout with preview
+		// Use 90% of terminal width, minimum 100 chars for usable preview
+		popupWidth := m.width * 90 / 100
+		if popupWidth < 100 {
+			popupWidth = min(m.width-4, 100)
+		}
 
-	popup := browserPopupStyle.Render(content)
+		// Split: 35% for list, 65% for preview (preview needs more space for content)
+		listWidth := popupWidth * 35 / 100
+		if listWidth < 40 {
+			listWidth = 40 // minimum list width
+		}
+		previewWidth := popupWidth - listWidth - 8 // account for borders and gaps
+
+		var listContent string
+		if m.browserEmpty {
+			listContent = emptyStyle.Render("No panes available in this session.")
+		} else {
+			listContent = m.browserList.View()
+		}
+
+		// Render list panel
+		listPanel := browserPopupStyle.
+			Width(listWidth).
+			Render(listContent)
+
+		// Render preview panel
+		var previewContent string
+		if m.browserPreviewErr != nil {
+			previewContent = errorStyle.Render(fmt.Sprintf("Error: %v", m.browserPreviewErr))
+		} else if m.browserPreviewContent == "" {
+			previewContent = emptyStyle.Render("No content")
+		} else {
+			// Truncate lines that are too wide and limit height
+			lines := strings.Split(m.browserPreviewContent, "\n")
+			maxLines := 18
+			if len(lines) > maxLines {
+				lines = lines[len(lines)-maxLines:]
+			}
+			// Truncate each line to fit preview width
+			maxLineWidth := previewWidth - 4 // account for padding
+			for i, line := range lines {
+				if len(line) > maxLineWidth {
+					lines[i] = line[:maxLineWidth]
+				}
+			}
+			previewContent = strings.Join(lines, "\n")
+		}
+
+		previewPanel := previewPanelStyle.
+			Width(previewWidth).
+			Render(previewTitleStyle.Render("Preview") + "\n" + previewContent)
+
+		// Join panels horizontally
+		popup = lipgloss.JoinHorizontal(lipgloss.Top, listPanel, previewPanel)
+	}
 
 	// Center the popup
 	centered := lipgloss.Place(
@@ -1125,22 +1314,28 @@ func (m Model) renderConfigurePopup() string {
 		}
 	}
 
-	// Sound toggle row
-	soundStatus := "[ ]"
-	if pane.SoundOnReady {
-		soundStatus = "[x]"
-	}
+	// Sound toggle row - show tri-state: [D] default, [x] enabled, [ ] disabled
+	soundStatus := triStateIndicator(pane.SoundOnReady, m.config.Alerts.SoundOnReady)
 	if m.configMenuItem == configMenuSound {
 		lines = append(lines, "> Sound on Ready: "+soundStatus)
 	} else {
 		lines = append(lines, "  Sound on Ready: "+soundStatus)
 	}
 
-	// Notification toggle row
-	notifyStatus := "[ ]"
-	if pane.NotifyOnReady {
-		notifyStatus = "[x]"
+	// Sound type row - show current sound type with indicator for default
+	soundType := pane.GetEffectiveSoundType(m.config)
+	soundTypeDisplay := soundType
+	if pane.SoundType == nil || *pane.SoundType == "" {
+		soundTypeDisplay = "[D:" + soundType + "]"
 	}
+	if m.configMenuItem == configMenuSoundType {
+		lines = append(lines, "> Sound Type: "+soundTypeDisplay)
+	} else {
+		lines = append(lines, "  Sound Type: "+soundTypeDisplay)
+	}
+
+	// Notification toggle row - show tri-state: [D] default, [x] enabled, [ ] disabled
+	notifyStatus := triStateIndicator(pane.NotifyOnReady, m.config.Alerts.NotifyOnReady)
 	if m.configMenuItem == configMenuNotify {
 		lines = append(lines, "> Notify on Ready: "+notifyStatus)
 	} else {

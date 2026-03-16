@@ -1,0 +1,64 @@
+# Teejay Configuration
+# Copy this file to ~/.config/teejay/config.yaml to customize
+
+detection:
+  # How long content must be unchanged before marking a pane as "waiting"
+  # Set to "0s" to disable idle detection (only use pattern matching)
+  # Default: 2s
+  idle_timeout: 2s
+
+  # Global prompt endings - characters that indicate a shell prompt when found
+  # at the end of the last non-empty line. Empty by default because shell
+  # prompts are unreliable across different setups.
+  # Example: ["$", ">", "#", "%", "❯", "➜"]
+  # Default: []
+  prompt_endings: []
+
+  # Global waiting strings - substrings that indicate the pane is waiting
+  # for user input when found anywhere in the content.
+  # Default: []
+  waiting_strings: []
+
+  # App-specific patterns
+  # When a pane is running one of these applications (matched by process name),
+  # ONLY the app-specific patterns are used - global patterns are ignored.
+  # This allows precise detection for each tool without interference.
+  apps:
+    # Claude Code - Anthropic's AI coding assistant
+    claude:
+      waiting_strings:
+        - "? for shortcuts"
+
+    # Aider - AI pair programming tool
+    aider:
+      waiting_strings:
+        - "(Y)es/(N)o"
+
+    # Codex - OpenAI's coding assistant
+    codex:
+      waiting_strings:
+        - "[Y/n]"
+
+    # OpenCode - Open source AI coding tool
+    opencode:
+      waiting_strings:
+        - "Continue?"
+
+    # Example: Add your own app patterns
+    # myapp:
+    #   prompt_endings:
+    #     - ">"
+    #   waiting_strings:
+    #     - "Press Enter to continue"
+
+# Alert settings
+# Global defaults for notification and sound alerts.
+# Per-pane settings override these defaults.
+alerts:
+  # Play terminal bell when a pane becomes ready
+  # Default: false
+  sound_on_ready: false
+
+  # Send desktop notification when a pane becomes ready
+  # Default: false
+  notify_on_ready: false

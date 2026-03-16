@@ -20,6 +20,8 @@ Before creating a release, ensure:
 - [ ] `CHANGELOG.md` is updated with the new version's changes
 - [ ] The `[Unreleased]` section has been moved to a versioned section
 - [ ] Version number follows semantic versioning (e.g., `0.1.0`, `1.0.0`)
+- [ ] in cmd/tj/main.go update the version number
+- [ ] in flake.nix update the version number
 
 ## Creating a Release
 

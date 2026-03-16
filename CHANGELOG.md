@@ -7,9 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - TBD
+- Add `tj del` command
+- add release script
+- Configurable activity detection with idle timeout and app-specific patterns
+  (Claude Code, Codex, Aider, etc.)
+- Configuration file support (`~/.config/teejay/config.yaml`)
+- Global default settings for sound and notification alerts in config
+- Native audio playback with 5 selectable notification sounds (chime, bell,
+  ping, pop, ding)
+- Preview panel in pane browser popup for identifying panes
+- Auto-dismiss for temporary error messages (3 second timeout)
+- Configuration documentation in README.md
+- Example configuration file (`config.example.yaml`)
+- Preview panel title now shows pane name instead of pane ID
+- Sound alerts use native Go audio instead of terminal bell
+- goreleaser configuration for automated releases
+- GitHub Actions workflow for release automation
+- Version embedding via ldflags (`tj --version`)
+- RELEASING.md maintainer documentation
 
-### Added
+## [0.1.0] - TBD
 
 - TUI dashboard for monitoring multiple tmux panes
 - Real-time pane content preview with automatic refresh
@@ -23,9 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - External watchlist file sync (hot reload)
 - Desktop notifications when panes become ready
 - Sound alerts when panes become ready
-
-### Technical
-
 - Built with Bubble Tea TUI framework
 - Nix flake for reproducible builds
 - goreleaser for automated releases

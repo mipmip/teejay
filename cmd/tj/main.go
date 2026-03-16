@@ -1,16 +1,26 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"tj/internal/cmd"
 	"tj/internal/ui"
 )
 
-// version is set at build time via ldflags
-var version = "dev"
+// Version is embedded from the VERSION file at the repository root.
+// The VERSION file must be copied to cmd/tj/ before building.
+// The release script handles this automatically.
+//
+//go:embed VERSION
+var version string
+
+func init() {
+	version = strings.TrimSpace(version)
+}
 
 func main() {
 	if len(os.Args) > 1 {
@@ -20,6 +30,12 @@ func main() {
 			return
 		case "add":
 			if err := cmd.AddPane(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "del":
+			if err := cmd.DelPane(); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}

@@ -11,9 +11,7 @@ import (
 	"tj/internal/ui"
 )
 
-// Version is embedded from the VERSION file at the repository root.
-// The VERSION file must be copied to cmd/tj/ before building.
-// The release script handles this automatically.
+// Version is embedded from the VERSION file (single source of truth).
 //
 //go:embed VERSION
 var version string

@@ -1,7 +1,7 @@
 # Binaries
 tmon
 result
-tj
+/tj
 dist/
 *.exe
 *.exe~

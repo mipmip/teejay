@@ -70,11 +70,12 @@ fi
 success "CHANGELOG.md has [Unreleased] section"
 
 # --- Read Current Version ---
-if [[ ! -f "VERSION" ]]; then
-    error "VERSION file not found"
+VERSION_FILE="cmd/tj/VERSION"
+if [[ ! -f "$VERSION_FILE" ]]; then
+    error "VERSION file not found at $VERSION_FILE"
 fi
 
-CURRENT_VERSION=$(cat VERSION | tr -d '\n')
+CURRENT_VERSION=$(cat "$VERSION_FILE" | tr -d '\n')
 info "Current version: ${BOLD}$CURRENT_VERSION${NC}"
 
 # Parse version components
@@ -124,12 +125,8 @@ echo ""
 info "Creating release..."
 
 # Update VERSION file
-echo "$NEW_VERSION" > VERSION
+echo "$NEW_VERSION" > "$VERSION_FILE"
 success "Updated VERSION file"
-
-# Copy VERSION to cmd/tj for go:embed
-cp VERSION cmd/tj/VERSION
-success "Copied VERSION to cmd/tj/"
 
 # Update CHANGELOG.md
 TODAY=$(date +%Y-%m-%d)
@@ -137,7 +134,7 @@ sed -i "s/## \[Unreleased\]/## [Unreleased]\n\n## [$NEW_VERSION] - $TODAY/" CHAN
 success "Updated CHANGELOG.md with version $NEW_VERSION"
 
 # Commit changes
-git add VERSION cmd/tj/VERSION CHANGELOG.md
+git add "$VERSION_FILE" CHANGELOG.md
 git commit -m "chore: release v$NEW_VERSION"
 success "Created release commit"
 

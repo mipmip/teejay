@@ -1,7 +1,8 @@
 # release-automation Specification
 
 ## Purpose
-TBD - created by archiving change release-process. Update Purpose after archive.
+Automate the release process with scripts, goreleaser, and GitHub Actions.
+
 ## Requirements
 ### Requirement: goreleaser configuration
 

@@ -18,7 +18,7 @@
         {
           default = pkgs.buildGoModule rec {
             pname = "tj";
-            version = builtins.replaceStrings ["\n"] [""] (builtins.readFile ./VERSION);
+            version = builtins.replaceStrings ["\n"] [""] (builtins.readFile ./cmd/tj/VERSION);
 
             src = ./.;
             vendorHash = "sha256-yAmydoJZXlipqhZsjojoPA3uoI8BhaU4sPzs9OZ1+3w=";

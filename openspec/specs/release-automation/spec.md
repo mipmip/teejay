@@ -57,3 +57,19 @@ The project SHALL maintain a `CHANGELOG.md` file documenting changes in each rel
 - **WHEN** changes are made between releases
 - **THEN** they are documented under an "Unreleased" section at the top
 
+### Requirement: Release script
+
+The project SHALL have a `scripts/release.sh` script for interactive release creation.
+
+#### Scenario: Version bump selection
+- **WHEN** maintainer runs `scripts/release.sh`
+- **THEN** an interactive prompt allows selecting major, minor, or patch bump
+
+#### Scenario: Safety checks
+- **WHEN** release script runs
+- **THEN** it verifies: clean git working directory, on main branch, changelog has [Unreleased] section
+
+#### Scenario: Automated updates
+- **WHEN** release is confirmed
+- **THEN** script updates `cmd/tj/VERSION`, updates CHANGELOG.md with version and date, commits, tags, and pushes
+

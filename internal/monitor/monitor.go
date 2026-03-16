@@ -57,9 +57,14 @@ func (m *Monitor) Update(paneID, content, appName string) PaneStatus {
 	}
 
 	// Get patterns for this app (app-specific replace globals)
-	promptEndings, waitingStrings := m.config.GetPatternsForApp(appName)
+	promptEndings, waitingStrings, busyStrings := m.config.GetPatternsForApp(appName)
 
-	// Check for pattern matches
+	// Check for busy strings first - they take precedence over waiting detection
+	if m.hasBusyString(content, busyStrings) {
+		return Busy
+	}
+
+	// Check for waiting pattern matches
 	if m.hasWaitingString(content, waitingStrings) {
 		return Waiting
 	}
@@ -76,6 +81,17 @@ func (m *Monitor) Update(paneID, content, appName string) PaneStatus {
 	}
 
 	return Busy
+}
+
+// hasBusyString checks if content contains any of the busy strings.
+// Busy strings take precedence over waiting strings.
+func (m *Monitor) hasBusyString(content string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if strings.Contains(content, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // hasWaitingString checks if content contains any of the waiting strings.

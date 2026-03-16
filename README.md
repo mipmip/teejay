@@ -2,12 +2,15 @@
 
 **Terminal Junky** - A tmux activity monitor for vibe coders
 
-Teejay fuels your addiction to terminal-based development by letting you monitor multiple tmux panes at once. Perfect for vibe coding with parallel AI agent sessions.
+Teejay monitors multiple tmux panes you select yourself at once. Perfect for
+vibe coding with parallel AI agent sessions.
+
+![Teejay Demo](demo.gif)
 
 ## Why
 
 We want to be free in our Tmux use, but it's obvious that in this vibecoding age
-we want to use tmux for running parallel agent sessions. TeeJay does not want to force
+we want to use tmux for running parallel agent sessions. Teejay does not force
 you a coding workflow. Teejay serves as a watch list for panes which the user wants to monitor.
 
 ## Features
@@ -49,8 +52,17 @@ go build -o tj ./cmd/tj
 # Launch the TUI
 tj
 
+# Show help
+tj --help
+
 # Add current pane to watchlist (run from within tmux)
 tj add
+
+# Remove current pane from watchlist
+tj del
+
+# Use custom config and watchlist paths
+tj --config /path/to/config.yaml --watchlist /path/to/watchlist.json
 ```
 
 ## Configuration

@@ -26,13 +26,20 @@ func GetTmuxPaneID() (string, error) {
 	return paneID, nil
 }
 
-func AddPane() error {
+// AddPane adds the current tmux pane to the watchlist.
+// If watchlistPath is provided, uses that path instead of the default.
+func AddPane(watchlistPath ...string) error {
 	paneID, err := GetTmuxPaneID()
 	if err != nil {
 		return fmt.Errorf("cannot add pane: %w", err)
 	}
 
-	wl, err := watchlist.Load()
+	var wl *watchlist.Watchlist
+	if len(watchlistPath) > 0 && watchlistPath[0] != "" {
+		wl, err = watchlist.Load(watchlistPath[0])
+	} else {
+		wl, err = watchlist.Load()
+	}
 	if err != nil {
 		return fmt.Errorf("failed to load watchlist: %w", err)
 	}

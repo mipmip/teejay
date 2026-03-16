@@ -147,24 +147,31 @@ func TestGetPatternsForApp(t *testing.T) {
 	cfg := Default()
 
 	// App with config should return app-specific patterns (replace globals)
-	endings, strings := cfg.GetPatternsForApp("claude")
+	endings, waitingStrs, busyStrs := cfg.GetPatternsForApp("claude")
 	if len(endings) != 0 {
 		t.Errorf("expected no prompt endings for claude, got %v", endings)
 	}
-	if len(strings) == 0 {
+	if len(waitingStrs) == 0 {
 		t.Error("expected waiting strings for claude")
+	}
+	if len(busyStrs) == 0 {
+		t.Error("expected busy strings for claude")
 	}
 
 	// App without config should return global patterns
 	cfg.Detection.PromptEndings = []string{"$", ">"}
 	cfg.Detection.WaitingStrings = []string{"global prompt"}
+	cfg.Detection.BusyStrings = []string{"processing"}
 
-	endings, strings = cfg.GetPatternsForApp("unknown-app")
+	endings, waitingStrs, busyStrs = cfg.GetPatternsForApp("unknown-app")
 	if len(endings) != 2 {
 		t.Errorf("expected 2 global prompt endings, got %v", endings)
 	}
-	if len(strings) != 1 || strings[0] != "global prompt" {
-		t.Errorf("expected global waiting string, got %v", strings)
+	if len(waitingStrs) != 1 || waitingStrs[0] != "global prompt" {
+		t.Errorf("expected global waiting string, got %v", waitingStrs)
+	}
+	if len(busyStrs) != 1 || busyStrs[0] != "processing" {
+		t.Errorf("expected global busy string, got %v", busyStrs)
 	}
 }
 
@@ -203,5 +210,51 @@ alerts:
 	}
 	if !cfg.Alerts.NotifyOnReady {
 		t.Error("expected NotifyOnReady to be true")
+	}
+}
+
+func TestLoadWithCustomPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := filepath.Join(tmpDir, "custom-config.yaml")
+
+	configContent := `
+detection:
+  idle_timeout: 10s
+alerts:
+  sound_on_ready: true
+`
+	os.WriteFile(customPath, []byte(configContent), 0644)
+
+	cfg := Load(customPath)
+
+	if cfg.Detection.IdleTimeout != 10*time.Second {
+		t.Errorf("expected idle timeout 10s from custom path, got %v", cfg.Detection.IdleTimeout)
+	}
+	if !cfg.Alerts.SoundOnReady {
+		t.Error("expected SoundOnReady to be true from custom path")
+	}
+}
+
+func TestLoadWithCustomPathMissing(t *testing.T) {
+	cfg := Load("/nonexistent/config.yaml")
+
+	// Should return defaults when custom path doesn't exist
+	if cfg.Detection.IdleTimeout != 2*time.Second {
+		t.Errorf("expected default idle timeout for missing custom path, got %v", cfg.Detection.IdleTimeout)
+	}
+}
+
+func TestLoadWithEmptyCustomPath(t *testing.T) {
+	// Empty string should fall back to default path behavior
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	cfg := Load("")
+
+	// Should return defaults (no config file in temp home)
+	if cfg.Detection.IdleTimeout != 2*time.Second {
+		t.Errorf("expected default idle timeout, got %v", cfg.Detection.IdleTimeout)
 	}
 }

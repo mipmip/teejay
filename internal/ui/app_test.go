@@ -9,7 +9,7 @@ import (
 )
 
 func TestNewModel(t *testing.T) {
-	m := New("test")
+	m := New("test", nil, "")
 	if m.View() == "" {
 		t.Error("View() should return non-empty string")
 	}
@@ -20,7 +20,7 @@ func TestEmptyWatchlistShowsMessage(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New("test")
+	m := New("test", nil, "")
 	view := m.View()
 
 	if !strings.Contains(view, "No panes are being watched") {
@@ -47,7 +47,7 @@ func TestModelHasViewportAndList(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New("test")
+	m := New("test", nil, "")
 
 	// Model should have viewport initialized (width > 0 after init)
 	// This is a basic structural test
@@ -62,7 +62,7 @@ func TestSplitPanelLayoutWithPanes(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New("test")
+	m := New("test", nil, "")
 
 	// With empty watchlist, should not show split panel
 	view := m.View()
@@ -75,7 +75,7 @@ func TestTemporaryMessageState(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New("test")
+	m := New("test", nil, "")
 
 	// Initially temporaryMessage should be empty
 	if m.temporaryMessage != "" {
@@ -93,7 +93,7 @@ func TestFooterIncludesEnterKeybinding(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New("test")
+	m := New("test", nil, "")
 	// The empty state shows different footer, so we check the model has the right structure
 	// For non-empty state, footer would include "Enter: switch"
 	// This is a structural test since we can't easily create panes in test
@@ -106,7 +106,7 @@ func TestConfigurePopupStateTransitions(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New("test")
+	m := New("test", nil, "")
 
 	// Initially configuring should be false
 	if m.configuring {
@@ -205,7 +205,7 @@ func TestRemoveStalePaneSetsStatusMessage(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New("test")
+	m := New("test", nil, "")
 
 	// Manually add a pane to the watchlist
 	m.watchlist.Add("%99")
@@ -240,7 +240,7 @@ func TestRemoveStalePaneWithMultiplePanes(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New("test")
+	m := New("test", nil, "")
 
 	// Add multiple panes
 	m.watchlist.Add("%98")
@@ -276,7 +276,7 @@ func TestStatusMessageClearsOnKeyPress(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New("test")
+	m := New("test", nil, "")
 	m.statusMessage = "Test message"
 
 	// Simulate a key press
@@ -292,7 +292,7 @@ func TestPreviewTitleShowsCustomPaneName(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New("test")
+	m := New("test", nil, "")
 
 	// Add a pane with a custom name
 	m.watchlist.AddWithName("%10", "My Project")
@@ -320,7 +320,7 @@ func TestPreviewTitleFallsBackToPaneID(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	m := New("test")
+	m := New("test", nil, "")
 
 	// Add a pane without a custom name
 	m.watchlist.Add("%20")

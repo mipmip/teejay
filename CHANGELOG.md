@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- fix: add sessions were not focussed correctly
+- fix: allow adding new panes in smaller screens
+- feature: alternative config and watchlist cli options
+- feature: add --help
+
 ## [0.2.1] - 2026-03-16
+
+- fixes to the release script
 
 ## [0.2.0] - 2026-03-16
 

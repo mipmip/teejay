@@ -8,13 +8,20 @@ import (
 	"tj/internal/watchlist"
 )
 
-func DelPane() error {
+// DelPane removes the current tmux pane from the watchlist.
+// If watchlistPath is provided, uses that path instead of the default.
+func DelPane(watchlistPath ...string) error {
 	paneID, err := GetTmuxPaneID()
 	if err != nil {
 		return fmt.Errorf("cannot delete pane: %w", err)
 	}
 
-	wl, err := watchlist.Load()
+	var wl *watchlist.Watchlist
+	if len(watchlistPath) > 0 && watchlistPath[0] != "" {
+		wl, err = watchlist.Load(watchlistPath[0])
+	} else {
+		wl, err = watchlist.Load()
+	}
 	if err != nil {
 		return fmt.Errorf("failed to load watchlist: %w", err)
 	}

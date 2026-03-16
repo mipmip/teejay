@@ -13,6 +13,7 @@ import (
 type AppPatterns struct {
 	PromptEndings  []string `yaml:"prompt_endings,omitempty"`
 	WaitingStrings []string `yaml:"waiting_strings,omitempty"`
+	BusyStrings    []string `yaml:"busy_strings,omitempty"`
 }
 
 // Detection holds activity detection configuration.
@@ -20,6 +21,7 @@ type Detection struct {
 	IdleTimeout    time.Duration          `yaml:"idle_timeout"`
 	PromptEndings  []string               `yaml:"prompt_endings"`
 	WaitingStrings []string               `yaml:"waiting_strings"`
+	BusyStrings    []string               `yaml:"busy_strings"`
 	Apps           map[string]AppPatterns `yaml:"apps,omitempty"`
 }
 
@@ -42,6 +44,7 @@ type configFile struct {
 		IdleTimeout    string                 `yaml:"idle_timeout"`
 		PromptEndings  []string               `yaml:"prompt_endings"`
 		WaitingStrings []string               `yaml:"waiting_strings"`
+		BusyStrings    []string               `yaml:"busy_strings"`
 		Apps           map[string]AppPatterns `yaml:"apps"`
 	} `yaml:"detection"`
 	Alerts Alerts `yaml:"alerts"`
@@ -54,9 +57,11 @@ func Default() *Config {
 			IdleTimeout:    2 * time.Second,
 			PromptEndings:  []string{},
 			WaitingStrings: []string{},
+			BusyStrings:    []string{},
 			Apps: map[string]AppPatterns{
 				"claude": {
 					WaitingStrings: []string{"? for shortcuts"},
+					BusyStrings:    []string{"Thinking", "Reasoning", "Undulating"},
 				},
 				"aider": {
 					WaitingStrings: []string{"(Y)es/(N)o"},
@@ -66,6 +71,7 @@ func Default() *Config {
 				},
 				"opencode": {
 					WaitingStrings: []string{"Continue?"},
+					BusyStrings:    []string{"Thinking", "Working"},
 				},
 			},
 		},
@@ -86,12 +92,19 @@ func ConfigPath() (string, error) {
 	return filepath.Join(home, ".config", "teejay", "config.yaml"), nil
 }
 
-// Load reads the configuration from ~/.config/teejay/config.yaml.
+// Load reads the configuration from the specified path, or ~/.config/teejay/config.yaml if not provided.
 // If the file doesn't exist or is malformed, returns defaults.
-func Load() *Config {
-	path, err := ConfigPath()
-	if err != nil {
-		return Default()
+func Load(customPath ...string) *Config {
+	var path string
+	var err error
+
+	if len(customPath) > 0 && customPath[0] != "" {
+		path = customPath[0]
+	} else {
+		path, err = ConfigPath()
+		if err != nil {
+			return Default()
+		}
 	}
 
 	data, err := os.ReadFile(path)
@@ -127,6 +140,9 @@ func Load() *Config {
 	if cf.Detection.WaitingStrings != nil {
 		cfg.Detection.WaitingStrings = cf.Detection.WaitingStrings
 	}
+	if cf.Detection.BusyStrings != nil {
+		cfg.Detection.BusyStrings = cf.Detection.BusyStrings
+	}
 
 	// Merge app patterns: file overrides defaults for specified apps
 	if cf.Detection.Apps != nil {
@@ -148,9 +164,9 @@ func Load() *Config {
 // GetPatternsForApp returns the patterns to use for a given application.
 // If the app has specific config, returns those patterns (replacing globals).
 // Otherwise returns global patterns.
-func (c *Config) GetPatternsForApp(appName string) (promptEndings, waitingStrings []string) {
+func (c *Config) GetPatternsForApp(appName string) (promptEndings, waitingStrings, busyStrings []string) {
 	if appPatterns, ok := c.Detection.Apps[appName]; ok {
-		return appPatterns.PromptEndings, appPatterns.WaitingStrings
+		return appPatterns.PromptEndings, appPatterns.WaitingStrings, appPatterns.BusyStrings
 	}
-	return c.Detection.PromptEndings, c.Detection.WaitingStrings
+	return c.Detection.PromptEndings, c.Detection.WaitingStrings, c.Detection.BusyStrings
 }

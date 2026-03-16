@@ -28,6 +28,7 @@ func (p Pane) DisplayName() string {
 
 type Watchlist struct {
 	Panes []Pane `json:"panes"`
+	path  string // path to the watchlist file (not serialized)
 }
 
 // ConfigPath returns the path to the watchlist configuration file.
@@ -39,15 +40,24 @@ func ConfigPath() (string, error) {
 	return filepath.Join(home, ".config", "teejay", "watchlist.json"), nil
 }
 
-func Load() (*Watchlist, error) {
-	path, err := ConfigPath()
-	if err != nil {
-		return nil, err
+// Load reads the watchlist from the specified path, or ~/.config/teejay/watchlist.json if not provided.
+// The watchlist remembers its path for subsequent Save() calls.
+func Load(customPath ...string) (*Watchlist, error) {
+	var path string
+	var err error
+
+	if len(customPath) > 0 && customPath[0] != "" {
+		path = customPath[0]
+	} else {
+		path, err = ConfigPath()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return &Watchlist{Panes: []Pane{}}, nil
+		return &Watchlist{Panes: []Pane{}, path: path}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -57,14 +67,21 @@ func Load() (*Watchlist, error) {
 	if err := json.Unmarshal(data, &wl); err != nil {
 		return nil, err
 	}
+	wl.path = path
 	wl.Deduplicate()
 	return &wl, nil
 }
 
+// Save writes the watchlist to the path it was loaded from.
+// If the watchlist was created without loading, it saves to the default path.
 func (wl *Watchlist) Save() error {
-	path, err := ConfigPath()
-	if err != nil {
-		return err
+	path := wl.path
+	if path == "" {
+		var err error
+		path, err = ConfigPath()
+		if err != nil {
+			return err
+		}
 	}
 
 	dir := filepath.Dir(path)

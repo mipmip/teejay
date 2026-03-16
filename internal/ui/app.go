@@ -290,15 +290,41 @@ type Model struct {
 	brandingShimmer int               // shimmer animation frame (0 = not animating)
 }
 
-func New(version string) Model {
-	wl, err := watchlist.Load()
+// New creates a new Model with the given version, config, and optional watchlist path.
+// If cfg is nil, config is loaded from the default path.
+// If watchlistPath is empty, the default watchlist path is used.
+func New(version string, cfg *config.Config, watchlistPath string) Model {
+	// Load config if not provided
+	if cfg == nil {
+		cfg = config.Load()
+	}
+
+	// Load watchlist from custom path if provided
+	var wl *watchlist.Watchlist
+	var err error
+	if watchlistPath != "" {
+		wl, err = watchlist.Load(watchlistPath)
+	} else {
+		wl, err = watchlist.Load()
+	}
 	if err != nil {
-		return Model{loadErr: err, version: version}
+		// Still need to initialize list/viewport to avoid nil panics on WindowSizeMsg
+		l := list.New([]list.Item{}, browserItemDelegate{}, 30, 20)
+		l.Title = "Watched Panes"
+		l.SetShowStatusBar(false)
+		l.SetFilteringEnabled(false)
+		l.SetShowHelp(false)
+		vp := viewport.New(50, 20)
+		return Model{loadErr: err, version: version, config: cfg, list: l, viewport: vp}
 	}
 
 	// Get initial mtime for watchlist file
 	var wlMtime time.Time
-	if path, err := watchlist.ConfigPath(); err == nil {
+	if watchlistPath != "" {
+		if info, err := os.Stat(watchlistPath); err == nil {
+			wlMtime = info.ModTime()
+		}
+	} else if path, err := watchlist.ConfigPath(); err == nil {
 		if info, err := os.Stat(path); err == nil {
 			wlMtime = info.ModTime()
 		}
@@ -322,9 +348,6 @@ func New(version string) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Enter name..."
 	ti.CharLimit = 50
-
-	// Load configuration
-	cfg := config.Load()
 
 	m := Model{
 		list:           l,
@@ -743,8 +766,9 @@ func (m Model) updateBrowsing(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.watchlist.Save()
 						m.refreshList()
 						m.empty = false
-						// Select the newly added pane
+						// Select the newly added pane (it's at the end of the list)
 						m.selectedPaneID = item.paneInfo.ID
+						m.list.Select(len(m.watchlist.Panes) - 1)
 						m.captureSelectedPane()
 					}
 					m.browsing = false
@@ -983,6 +1007,27 @@ func (m *Model) refreshListWithFrame(frame int) {
 	m.empty = len(items) == 0
 }
 
+// browserListWidth calculates the appropriate list width for the browser popup.
+// On narrow screens (< 80 cols) shows list only, on wider screens shows split with preview.
+func (m *Model) browserListWidth() int {
+	popupWidth := m.width * 90 / 100
+	if popupWidth < 40 {
+		popupWidth = m.width - 4
+	}
+
+	// On narrow screens, use full popup width (minus padding)
+	if m.width < 80 {
+		return popupWidth - 6 // account for border and padding
+	}
+
+	// On wider screens, use 35% for list panel
+	listWidth := popupWidth * 35 / 100
+	if listWidth < 30 {
+		listWidth = 30
+	}
+	return listWidth - 6 // account for border and padding
+}
+
 func (m *Model) loadBrowserPanes() {
 	allPanes, err := tmux.ListAllPanes()
 	if err != nil {
@@ -1031,8 +1076,10 @@ func (m *Model) loadSessionList() {
 	}
 
 	// Create session list with custom styled delegate
+	// Calculate list width based on screen size
+	listWidth := m.browserListWidth()
 	delegate := browserItemDelegate{}
-	m.browserList = list.New(items, delegate, 50, 15)
+	m.browserList = list.New(items, delegate, listWidth, 15)
 	m.browserList.Title = "Select Session"
 	m.browserList.SetShowStatusBar(false)
 	m.browserList.SetFilteringEnabled(false)
@@ -1052,8 +1099,10 @@ func (m *Model) loadPaneListForSession(sessionName string) {
 	}
 
 	// Create pane list with custom styled delegate
+	// Calculate list width based on screen size
+	listWidth := m.browserListWidth()
 	delegate := browserItemDelegate{}
-	m.browserList = list.New(items, delegate, 50, 15)
+	m.browserList = list.New(items, delegate, listWidth, 15)
 	m.browserList.Title = "Select Pane (" + sessionName + ")"
 	m.browserList.SetShowStatusBar(false)
 	m.browserList.SetFilteringEnabled(false)
@@ -1202,27 +1251,43 @@ func (m Model) renderBrowserPopup() string {
 
 	// Session list: single panel layout
 	if m.browsingSession {
+		// Calculate popup width - use most of screen but not more than available
+		popupWidth := m.width * 80 / 100
+		if popupWidth < 30 {
+			popupWidth = m.width - 4
+		}
+
 		var content string
 		if m.browserEmpty {
 			content = emptyStyle.Render("No additional panes available.\nAll tmux panes are already being watched.")
 		} else {
 			content = m.browserList.View()
 		}
-		popup = browserPopupStyle.Render(content)
+		popup = browserPopupStyle.Width(popupWidth).Render(content)
 	} else {
-		// Pane list: split layout with preview
-		// Use 90% of terminal width, minimum 100 chars for usable preview
+		// Pane list: split layout with preview (on wide screens) or single panel (narrow)
+		// Use 90% of terminal width
 		popupWidth := m.width * 90 / 100
-		if popupWidth < 100 {
-			popupWidth = min(m.width-4, 100)
+		if popupWidth < 40 {
+			popupWidth = m.width - 4
 		}
 
-		// Split: 35% for list, 65% for preview (preview needs more space for content)
-		listWidth := popupWidth * 35 / 100
-		if listWidth < 40 {
-			listWidth = 40 // minimum list width
+		// On narrow screens (< 80 cols), show list only without preview
+		showPreview := m.width >= 80
+
+		var listWidth, previewWidth int
+		if showPreview {
+			// Split: 35% for list, 65% for preview
+			listWidth = popupWidth * 35 / 100
+			if listWidth < 30 {
+				listWidth = 30
+			}
+			previewWidth = popupWidth - listWidth - 8 // account for borders and gaps
+		} else {
+			// Single panel - use full popup width
+			listWidth = popupWidth - 4
+			previewWidth = 0
 		}
-		previewWidth := popupWidth - listWidth - 8 // account for borders and gaps
 
 		var listContent string
 		if m.browserEmpty {
@@ -1236,35 +1301,40 @@ func (m Model) renderBrowserPopup() string {
 			Width(listWidth).
 			Render(listContent)
 
-		// Render preview panel
-		var previewContent string
-		if m.browserPreviewErr != nil {
-			previewContent = errorStyle.Render(fmt.Sprintf("Error: %v", m.browserPreviewErr))
-		} else if m.browserPreviewContent == "" {
-			previewContent = emptyStyle.Render("No content")
-		} else {
-			// Truncate lines that are too wide and limit height
-			lines := strings.Split(m.browserPreviewContent, "\n")
-			maxLines := 18
-			if len(lines) > maxLines {
-				lines = lines[len(lines)-maxLines:]
-			}
-			// Truncate each line to fit preview width
-			maxLineWidth := previewWidth - 4 // account for padding
-			for i, line := range lines {
-				if len(line) > maxLineWidth {
-					lines[i] = line[:maxLineWidth]
+		if showPreview {
+			// Render preview panel
+			var previewContent string
+			if m.browserPreviewErr != nil {
+				previewContent = errorStyle.Render(fmt.Sprintf("Error: %v", m.browserPreviewErr))
+			} else if m.browserPreviewContent == "" {
+				previewContent = emptyStyle.Render("No content")
+			} else {
+				// Truncate lines that are too wide and limit height
+				lines := strings.Split(m.browserPreviewContent, "\n")
+				maxLines := 18
+				if len(lines) > maxLines {
+					lines = lines[len(lines)-maxLines:]
 				}
+				// Truncate each line to fit preview width
+				maxLineWidth := previewWidth - 4 // account for padding
+				for i, line := range lines {
+					if len(line) > maxLineWidth {
+						lines[i] = line[:maxLineWidth]
+					}
+				}
+				previewContent = strings.Join(lines, "\n")
 			}
-			previewContent = strings.Join(lines, "\n")
+
+			previewPanel := previewPanelStyle.
+				Width(previewWidth).
+				Render(previewTitleStyle.Render("Preview") + "\n" + previewContent)
+
+			// Join panels horizontally
+			popup = lipgloss.JoinHorizontal(lipgloss.Top, listPanel, previewPanel)
+		} else {
+			// Narrow screen - list only
+			popup = listPanel
 		}
-
-		previewPanel := previewPanelStyle.
-			Width(previewWidth).
-			Render(previewTitleStyle.Render("Preview") + "\n" + previewContent)
-
-		// Join panels horizontally
-		popup = lipgloss.JoinHorizontal(lipgloss.Top, listPanel, previewPanel)
 	}
 
 	// Center the popup

@@ -569,3 +569,93 @@ func TestBackwardCompatibilityWithOldWatchlistJSON(t *testing.T) {
 		t.Error("expected *false for pane with sound_on_ready: false")
 	}
 }
+
+func TestLoadWithCustomPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := filepath.Join(tmpDir, "custom-watchlist.json")
+
+	watchlistJSON := `{
+  "panes": [
+    {"id": "%99", "name": "custom-pane", "added_at": "2024-01-01T00:00:00Z"}
+  ]
+}`
+	os.WriteFile(customPath, []byte(watchlistJSON), 0644)
+
+	wl, err := Load(customPath)
+	if err != nil {
+		t.Fatalf("Load(customPath) error = %v", err)
+	}
+
+	if len(wl.Panes) != 1 {
+		t.Fatalf("expected 1 pane, got %d", len(wl.Panes))
+	}
+	if wl.Panes[0].ID != "%99" {
+		t.Errorf("expected pane ID %%99, got %s", wl.Panes[0].ID)
+	}
+	if wl.Panes[0].Name != "custom-pane" {
+		t.Errorf("expected pane name 'custom-pane', got %s", wl.Panes[0].Name)
+	}
+}
+
+func TestLoadWithCustomPathNonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := filepath.Join(tmpDir, "nonexistent.json")
+
+	wl, err := Load(customPath)
+	if err != nil {
+		t.Fatalf("Load(nonexistent) error = %v, want nil", err)
+	}
+
+	if len(wl.Panes) != 0 {
+		t.Errorf("expected empty watchlist for nonexistent file, got %d panes", len(wl.Panes))
+	}
+}
+
+func TestSaveToCustomPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := filepath.Join(tmpDir, "subdir", "custom-watchlist.json")
+
+	// Load from custom path (doesn't exist yet)
+	wl, err := Load(customPath)
+	if err != nil {
+		t.Fatalf("Load(customPath) error = %v", err)
+	}
+
+	// Add a pane and save
+	wl.Add("%42")
+
+	if err := wl.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Verify file exists at custom path
+	if _, err := os.Stat(customPath); os.IsNotExist(err) {
+		t.Fatalf("watchlist not saved to custom path")
+	}
+
+	// Reload and verify
+	loaded, err := Load(customPath)
+	if err != nil {
+		t.Fatalf("Load(customPath) after save error = %v", err)
+	}
+
+	if len(loaded.Panes) != 1 || loaded.Panes[0].ID != "%42" {
+		t.Errorf("saved pane not found in reloaded watchlist")
+	}
+}
+
+func TestLoadWithEmptyCustomPath(t *testing.T) {
+	// Empty string should fall back to default path behavior
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	wl, err := Load("")
+	if err != nil {
+		t.Fatalf("Load('') error = %v", err)
+	}
+
+	// Should return empty watchlist (no config file in temp home)
+	if len(wl.Panes) != 0 {
+		t.Errorf("expected empty watchlist, got %d panes", len(wl.Panes))
+	}
+}

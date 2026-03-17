@@ -10,9 +10,8 @@ builds:
   - main: ./cmd/tj
     binary: tj
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
     goos:
-      - linux
       - darwin
     goarch:
       - amd64
@@ -28,13 +27,10 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+  split: true
 
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^ci:"
-      - Merge pull request
-      - Merge branch
+  disable: true
+
+release:
+  mode: append

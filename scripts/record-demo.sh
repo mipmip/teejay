@@ -41,7 +41,7 @@ tmux send-keys -t aaa-opencode "opencode" Enter
 # Session 3: Another Claude session - this one we'll add via browser
 # Task should take ~15-20 seconds so it's still busy when we add it, then finishes during the demo
 tmux new-session -d -s aaa-claude-3 -n coding
-tmux send-keys -t aaa-claude-3 "claude 'Write a simple HTTP server in Go that responds with Hello World. Include the import statements and a brief explanation of each part.'" Enter
+tmux send-keys -t aaa-claude-3 "claude 'Write a complete REST API in Go with net/http that has endpoints for GET /users (returns a JSON list), POST /users (creates a user), and GET /users/{id} (returns a single user). Include a User struct with ID, Name, and Email fields, an in-memory store using a map, proper JSON encoding/decoding, error handling for missing users, and a brief explanation of the design choices.'" Enter
 
 # Give sessions time to start and begin processing
 # Wait longer to ensure claude sessions have started and are showing activity

@@ -5,9 +5,9 @@
 Teejay monitors multiple tmux panes you select yourself at once. Perfect for
 vibe coding with parallel AI agent sessions.
 
-<!--
+Here's a demo, though it's diffucult to tape a multisession vibe marathon.
+
 ![Teejay Demo](demo.gif)
--->
 
 ## Why
 

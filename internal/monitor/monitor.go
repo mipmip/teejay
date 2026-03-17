@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"crypto/sha256"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,6 +14,9 @@ type paneState struct {
 	hash           [32]byte
 	lastChangeTime time.Time
 }
+
+// ansiRegex matches ANSI escape sequences (CSI, OSC, etc.)
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x1b]*\x1b\\|\x1b\[[\?]?[0-9;]*[a-zA-Z]`)
 
 // Monitor tracks activity state for multiple panes.
 type Monitor struct {
@@ -37,6 +41,9 @@ func New(cfg *config.Config) *Monitor {
 // It uses configurable patterns and idle timeout detection.
 // appName is the current foreground process (e.g., "claude", "fish").
 func (m *Monitor) Update(paneID, content, appName string) PaneStatus {
+	// Strip ANSI escape sequences before hashing and pattern matching
+	// so that cursor/focus changes don't trigger false activity detection
+	content = ansiRegex.ReplaceAllString(content, "")
 	hash := sha256.Sum256([]byte(content))
 	now := time.Now()
 

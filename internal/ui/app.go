@@ -509,8 +509,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if prevStatus != status {
 						m.paneStatuses[p.ID] = status
 						// Check for Busy -> Waiting transition and trigger alerts
+						// Suppress alerts if the pane is currently focused by the user in tmux
 						if prevStatus == monitor.Busy && status == monitor.Waiting {
-							m.triggerAlerts(p.ID)
+							if activePaneID := tmux.GetActivePaneID(); activePaneID != p.ID {
+								m.triggerAlerts(p.ID)
+							}
 						}
 					}
 

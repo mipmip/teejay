@@ -26,7 +26,6 @@ archives:
 
 checksum:
   name_template: "checksums_linux.txt"
-  split: true
 
 changelog:
   sort: asc

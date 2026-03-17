@@ -27,7 +27,6 @@ archives:
 
 checksum:
   name_template: "checksums_darwin.txt"
-  split: true
 
 changelog:
   disable: true

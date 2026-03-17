@@ -21,7 +21,7 @@
             version = builtins.replaceStrings ["\n"] [""] (builtins.readFile ./cmd/tj/VERSION);
 
             src = ./.;
-            vendorHash = "sha256-yAmydoJZXlipqhZsjojoPA3uoI8BhaU4sPzs9OZ1+3w=";
+            vendorHash = "sha256-0f5OH6wsS9bfxudKfsCuoqrvjTY6m8xJJghdyi0M4Kc=";
 
             nativeBuildInputs = with pkgs; [ pkg-config ];
             buildInputs = with pkgs; pkgs.lib.optionals pkgs.stdenv.isLinux [ alsa-lib ];

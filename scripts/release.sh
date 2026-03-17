@@ -120,6 +120,37 @@ if ! gum confirm "Proceed with release?"; then
     exit 0
 fi
 
+# --- Nix vendorHash Update ---
+update_nix_vendor_hash() {
+    if ! command -v nix &> /dev/null; then
+        warn "nix is not installed — skipping vendorHash update in flake.nix"
+        return 0
+    fi
+
+    info "Updating vendorHash in flake.nix..."
+
+    # Save the current vendorHash
+    OLD_HASH=$(grep 'vendorHash' flake.nix | sed 's/.*"\(.*\)".*/\1/')
+
+    # Temporarily set vendorHash to empty to force nix to compute the correct one
+    sed -i "s|vendorHash = \".*\"|vendorHash = \"\"|" flake.nix
+
+    # Run nix build and capture the expected hash from the error output
+    NIX_OUTPUT=$(nix build .#default 2>&1 || true)
+    NEW_HASH=$(echo "$NIX_OUTPUT" | grep "got:" | sed 's/.*got: *//')
+
+    if [[ -z "$NEW_HASH" ]]; then
+        # Restore old hash if we couldn't determine the new one
+        sed -i "s|vendorHash = \".*\"|vendorHash = \"$OLD_HASH\"|" flake.nix
+        warn "Could not determine new vendorHash — restored previous hash"
+        return 0
+    fi
+
+    # Update flake.nix with the correct hash
+    sed -i "s|vendorHash = \".*\"|vendorHash = \"$NEW_HASH\"|" flake.nix
+    success "Updated vendorHash to $NEW_HASH"
+}
+
 # --- Execute Release ---
 echo ""
 info "Creating release..."
@@ -133,8 +164,11 @@ TODAY=$(date +%Y-%m-%d)
 sed -i "s/## \[Unreleased\]/## [Unreleased]\n\n## [$NEW_VERSION] - $TODAY/" CHANGELOG.md
 success "Updated CHANGELOG.md with version $NEW_VERSION"
 
+# Update nix flake vendorHash
+update_nix_vendor_hash
+
 # Commit changes
-git add "$VERSION_FILE" CHANGELOG.md
+git add "$VERSION_FILE" CHANGELOG.md flake.nix
 git commit -m "chore: release v$NEW_VERSION"
 success "Created release commit"
 

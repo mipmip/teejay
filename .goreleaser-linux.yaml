@@ -10,12 +10,11 @@ builds:
   - main: ./cmd/tj
     binary: tj
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
     goos:
       - linux
     goarch:
       - amd64
-      - arm64
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
@@ -27,6 +26,7 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+  split: true
 
 changelog:
   sort: asc

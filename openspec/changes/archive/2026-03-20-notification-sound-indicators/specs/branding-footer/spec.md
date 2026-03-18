@@ -1,31 +1,4 @@
-# branding-footer Specification
-
-## Purpose
-TBD - created by archiving change branding-footer. Update Purpose after archive.
-## Requirements
-### Requirement: Display branded app name in footer
-
-The UI SHALL display "Terminal Junkie" text in the bottom-right corner of the screen with neon-style coloring.
-
-#### Scenario: Branding visible on normal terminal
-- **WHEN** the terminal width is 80 columns or more
-- **THEN** "Terminal Junkie" is displayed in the bottom-right corner with bright neon styling
-
-#### Scenario: Branding hidden on small terminal
-- **WHEN** the terminal width is less than 80 columns
-- **THEN** the branding footer is not displayed to preserve space
-
-### Requirement: Display version number in footer
-
-The UI SHALL display the current version number alongside the app branding.
-
-#### Scenario: Version displayed with branding
-- **WHEN** the branding footer is visible
-- **THEN** the version number is displayed below or next to "Terminal Junkie"
-
-#### Scenario: Dev version display
-- **WHEN** the app is running in development mode (version = "dev")
-- **THEN** the version shows as "dev"
+## ADDED Requirements
 
 ### Requirement: Global alert status in branding footer
 The branding footer SHALL display the global alert configuration status as compact symbols after the version number. The display format SHALL be `Terminal Junkie v0.x.x ♪ ✉` where each symbol is colored according to the global config state.
@@ -45,4 +18,3 @@ The branding footer SHALL display the global alert configuration status as compa
 #### Scenario: Systray hidden on narrow terminals
 - **WHEN** the terminal width is less than 80 columns
 - **THEN** the alert status symbols SHALL NOT be displayed (same as branding footer)
-

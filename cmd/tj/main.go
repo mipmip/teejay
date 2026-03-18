@@ -31,6 +31,7 @@ Usage:
 Commands:
   add         Add the current tmux pane to the watchlist
   del         Remove the current tmux pane from the watchlist
+  scan        Scan all panes and add those running known agents
 
 Flags:
   -h, --help              Show this help message
@@ -128,6 +129,12 @@ func main() {
 			return
 		case "del":
 			if err := cmd.DelPane(watchlistPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "scan":
+			if err := cmd.ScanPanes(cfg, watchlistPath); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}

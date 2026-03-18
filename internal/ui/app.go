@@ -19,6 +19,7 @@ import (
 	"tj/internal/config"
 	"tj/internal/monitor"
 	"tj/internal/naming"
+	"tj/internal/scan"
 	"tj/internal/tmux"
 	"tj/internal/watchlist"
 )
@@ -85,6 +86,14 @@ var (
 
 	versionStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#626262")) // Muted gray
+
+	// Alert indicator styles
+	soundEnabledStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#00FF00")) // Green
+	notifyEnabledStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FFD700")) // Yellow
+	alertDisabledStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#555555")) // Dim gray
 )
 
 // browserItemDelegate implements list.ItemDelegate for styled browser items
@@ -160,12 +169,16 @@ func (m *Model) showTemporaryMessage(msg string) tea.Cmd {
 
 // paneItem implements list.Item for watchlist panes
 type paneItem struct {
-	id      string
-	name    string
-	addedAt time.Time
-	status  monitor.PaneStatus
-	frame   int
-	command string // current foreground process
+	id             string
+	name           string
+	addedAt        time.Time
+	status         monitor.PaneStatus
+	frame          int
+	command        string // current foreground process
+	session        string // tmux session name
+	windowName     string // tmux window name
+	soundOverride  *bool  // per-pane sound override (nil = inheriting global)
+	notifyOverride *bool  // per-pane notification override (nil = inheriting global)
 }
 
 func (p paneItem) Title() string {
@@ -184,10 +197,16 @@ func (p paneItem) Indicator() string {
 	return indicator
 }
 func (p paneItem) Description() string {
+	breadcrumb := p.session + " > " + p.windowName
 	if p.command != "" {
-		return p.command
+		breadcrumb += " : " + p.command
 	}
-	return ""
+	if p.soundOverride != nil || p.notifyOverride != nil {
+		soundOn := p.soundOverride != nil && *p.soundOverride
+		notifyOn := p.notifyOverride != nil && *p.notifyOverride
+		breadcrumb += "  " + renderAlertIndicators(soundOn, notifyOn)
+	}
+	return breadcrumb
 }
 func (p paneItem) FilterValue() string { return p.id }
 
@@ -633,6 +652,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadBrowserPanes()
 			m.browsing = true
 			return m, nil
+		case "s":
+			// Scan for agent panes and auto-add
+			allPanes, err := tmux.ListAllPanes()
+			if err != nil {
+				m.statusMessage = fmt.Sprintf("Scan failed: %v", err)
+				return m, nil
+			}
+			result := scan.ScanAndAdd(m.watchlist, m.config, allPanes)
+			if result.Found == 0 {
+				m.statusMessage = "Scan: no agent panes found"
+			} else {
+				if result.Skipped > 0 {
+					m.statusMessage = fmt.Sprintf("Scan: added %d panes (%d already watched)", result.Added, result.Skipped)
+				} else {
+					m.statusMessage = fmt.Sprintf("Scan: added %d panes", result.Added)
+				}
+				if result.Added > 0 {
+					m.watchlist.Save()
+					m.refreshList()
+					m.empty = len(m.watchlist.Panes) == 0
+				}
+			}
+			return m, nil
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -992,10 +1034,12 @@ func (m *Model) refreshList() {
 }
 
 func (m *Model) refreshListWithFrame(frame int) {
-	// Fetch current commands for all panes
+	// Fetch current commands and pane info for all panes
+	paneInfoMap := make(map[string]*tmux.PaneInfo)
 	for _, p := range m.watchlist.Panes {
 		if paneInfo, err := tmux.GetPaneByID(p.ID); err == nil && paneInfo != nil {
 			m.paneCommands[p.ID] = paneInfo.Command
+			paneInfoMap[p.ID] = paneInfo
 		}
 		// On error, keep last known command (graceful degradation)
 	}
@@ -1004,7 +1048,12 @@ func (m *Model) refreshListWithFrame(frame int) {
 	for i, p := range m.watchlist.Panes {
 		status := m.paneStatuses[p.ID]
 		command := m.paneCommands[p.ID]
-		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: status, frame: frame, command: command}
+		var session, windowName string
+		if info, ok := paneInfoMap[p.ID]; ok {
+			session = info.Session
+			windowName = info.WindowName
+		}
+		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: status, frame: frame, command: command, session: session, windowName: windowName, soundOverride: p.SoundOnReady, notifyOverride: p.NotifyOnReady}
 	}
 	m.list.SetItems(items)
 	m.empty = len(items) == 0
@@ -1193,9 +1242,9 @@ func (m Model) View() string {
 	} else if m.temporaryMessage != "" {
 		footer = errorStyle.Render(m.temporaryMessage) + "\n" + helpStyle.Render("Press Esc to dismiss")
 	} else if m.statusMessage != "" {
-		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • a: add • c: configure • d: delete • q: quit")
+		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • a: add • s: scan • c: configure • d: delete • q: quit")
 	} else {
-		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • a: add • c: configure • d: delete • q: quit")
+		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • a: add • s: scan • c: configure • d: delete • q: quit")
 	}
 
 	// Add branding to footer line if terminal is wide enough
@@ -1210,6 +1259,22 @@ func (m Model) View() string {
 	}
 
 	return layout + "\n" + footer
+}
+
+// renderAlertIndicators returns styled ♪ ✉ symbols based on enabled state.
+func renderAlertIndicators(soundEnabled, notifyEnabled bool) string {
+	var sound, notify string
+	if soundEnabled {
+		sound = soundEnabledStyle.Render("♪")
+	} else {
+		sound = alertDisabledStyle.Render("♪")
+	}
+	if notifyEnabled {
+		notify = notifyEnabledStyle.Render("✉")
+	} else {
+		notify = alertDisabledStyle.Render("✉")
+	}
+	return sound + " " + notify
 }
 
 // renderBrandingFooter returns the "Terminal Junkie" branding with version
@@ -1246,7 +1311,8 @@ func (m Model) renderBrandingFooter() string {
 	}
 
 	ver := versionStyle.Render(" " + m.version)
-	return brand + ver
+	alerts := " " + renderAlertIndicators(m.config.Alerts.SoundOnReady, m.config.Alerts.NotifyOnReady)
+	return brand + ver + alerts
 }
 
 func (m Model) renderBrowserPopup() string {

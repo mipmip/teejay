@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- auto scan function for coding agents
+- symbols to show notitification settings globally and pane specific
+- new breadcrum display of location in tmux
+
 ## [0.2.6] - 2026-03-17
+
+- release fix
 
 ## [0.2.5] - 2026-03-17
 
+- release fix
+
 ## [0.2.4] - 2026-03-17
+
+- release fix
 
 ## [0.2.3] - 2026-03-17
 

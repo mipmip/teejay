@@ -43,6 +43,85 @@ func TestPaneItemInterface(t *testing.T) {
 	}
 }
 
+func TestPaneItemBreadcrumbFull(t *testing.T) {
+	item := paneItem{
+		id:         "%5",
+		session:    "technative-docs",
+		windowName: "proposals",
+		command:    "claude",
+	}
+	want := "technative-docs > proposals : claude"
+	if got := item.Description(); got != want {
+		t.Errorf("Description() = %q, want %q", got, want)
+	}
+}
+
+func TestPaneItemBreadcrumbNoProcess(t *testing.T) {
+	item := paneItem{
+		id:         "%5",
+		session:    "main",
+		windowName: "dev",
+	}
+	want := "main > dev"
+	if got := item.Description(); got != want {
+		t.Errorf("Description() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderAlertIndicators(t *testing.T) {
+	// Both enabled - should contain ♪ and ✉
+	result := renderAlertIndicators(true, true)
+	if !strings.Contains(result, "♪") || !strings.Contains(result, "✉") {
+		t.Errorf("renderAlertIndicators(true, true) should contain ♪ and ✉, got %q", result)
+	}
+
+	// Both disabled - should still contain symbols (just styled differently)
+	result = renderAlertIndicators(false, false)
+	if !strings.Contains(result, "♪") || !strings.Contains(result, "✉") {
+		t.Errorf("renderAlertIndicators(false, false) should contain ♪ and ✉, got %q", result)
+	}
+
+	// Mixed state
+	result = renderAlertIndicators(true, false)
+	if !strings.Contains(result, "♪") || !strings.Contains(result, "✉") {
+		t.Errorf("renderAlertIndicators(true, false) should contain ♪ and ✉, got %q", result)
+	}
+}
+
+func TestPaneItemDescriptionWithOverrides(t *testing.T) {
+	soundOn := true
+	notifyOff := false
+	item := paneItem{
+		id:             "%5",
+		session:        "main",
+		windowName:     "dev",
+		command:        "claude",
+		soundOverride:  &soundOn,
+		notifyOverride: &notifyOff,
+	}
+	got := item.Description()
+	if !strings.Contains(got, "main > dev : claude") {
+		t.Errorf("Description() should contain breadcrumb, got %q", got)
+	}
+	if !strings.Contains(got, "♪") || !strings.Contains(got, "✉") {
+		t.Errorf("Description() with overrides should contain alert indicators, got %q", got)
+	}
+}
+
+func TestPaneItemDescriptionNoOverrides(t *testing.T) {
+	item := paneItem{
+		id:         "%5",
+		session:    "main",
+		windowName: "dev",
+		command:    "claude",
+	}
+	got := item.Description()
+	want := "main > dev : claude"
+	if got != want {
+		t.Errorf("Description() = %q, want %q (no indicators without overrides)", got, want)
+	}
+}
+
 func TestModelHasViewportAndList(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)

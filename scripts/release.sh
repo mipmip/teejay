@@ -46,18 +46,11 @@ fi
 # --- Safety Checks ---
 info "Running safety checks..."
 
-# Check for clean git working directory
-if [[ -n $(git status --porcelain) ]]; then
-    error "Git working directory is not clean. Please commit or stash your changes."
+# Check for clean git working directory (works with both git and jj-colocated repos)
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    error "Working tree is not clean. Commit or stash changes first."
 fi
-success "Git working directory is clean"
-
-# Check currently on main branch
-CURRENT_BRANCH=$(git branch --show-current)
-if [[ "$CURRENT_BRANCH" != "main" ]]; then
-    error "Not on main branch (currently on '$CURRENT_BRANCH'). Please switch to main."
-fi
-success "On main branch"
+success "Working directory is clean"
 
 # Check CHANGELOG.md exists and contains [Unreleased]
 if [[ ! -f "CHANGELOG.md" ]]; then
@@ -178,7 +171,7 @@ success "Created tag v$NEW_VERSION"
 
 # Push to remote
 info "Pushing to remote..."
-git push origin main
+git push origin HEAD:main
 git push origin "v$NEW_VERSION"
 success "Pushed commit and tag to remote"
 

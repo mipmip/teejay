@@ -114,31 +114,82 @@ func (d browserItemDelegate) Render(w io.Writer, m list.Model, index int, item l
 	title := i.Title()
 	desc := i.Description()
 
-	// Apply styling based on selection state, using full list width minus margin
 	width := m.Width()
 	contentWidth := width - 2 // subtract left and right margin
-	style := browserItemStyle.Width(contentWidth)
+
+	bgColor := lipgloss.Color("#333333")
 	if index == m.Index() {
-		style = browserItemSelectedStyle.Width(contentWidth)
+		bgColor = lipgloss.Color("#555555")
 	}
 
-	// For paneItem, render indicator right-aligned on title line with bold title
-	titleLine := title
+	// Two-column layout: left (auto-width) + right (fixed width).
+	// Each cell is independently styled — no nested ANSI, no "bar" artifacts.
+	const rightColWidth = 7 // indicator / "♪ ✉" + padding
+	leftColWidth := contentWidth - rightColWidth
+
+	blankLine := lipgloss.NewStyle().Background(bgColor).Width(contentWidth).Render("")
+
+	leftBase := lipgloss.NewStyle().Background(bgColor).PaddingLeft(2).Width(leftColWidth)
+	rightBase := lipgloss.NewStyle().Background(bgColor).Width(rightColWidth).PaddingLeft(1).PaddingRight(1).Align(lipgloss.Right)
+
+	maxTextWidth := leftColWidth - 2 // subtract PaddingLeft
+	titleLeft := leftBase.Bold(true).Render(truncateWithEllipsis(title, maxTextWidth))
+	descLeft := leftBase.Bold(false).Render(desc)
+	indicatorRight := rightBase.Render(" ")
+	symbolsRight := rightBase.Render(" ")
+
 	if p, ok := item.(paneItem); ok {
-		indicator := p.Indicator()
-		// Calculate padding: contentWidth - padding(left 2 + right 1) - title length - indicator length - 1 space
-		innerWidth := contentWidth - 3 // padding (2+1)
-		padding := innerWidth - lipgloss.Width(title) - lipgloss.Width(indicator) - 1
-		if padding < 1 {
-			padding = 1
+		// Right column: indicator with color
+		indicatorText := p.status.IndicatorAnimated(p.frame)
+		indicatorStyle := rightBase
+		if p.status == monitor.Waiting {
+			indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#00FF00"))
 		}
-		titleLine = title + strings.Repeat(" ", padding) + indicator
+		indicatorRight = indicatorStyle.Render(indicatorText)
+
+		// Right column: alert symbols
+		if p.soundOverride != nil || p.notifyOverride != nil {
+			symbolsRight = rightBase.Render("♪ ✉ ")
+		}
+
+		// Left column: plain text description, truncated with ellipsis if too long
+		breadcrumb := p.session + " > " + p.windowName
+		if p.command != "" {
+			breadcrumb += " : " + p.command
+		}
+		maxWidth := leftColWidth - 2 // subtract PaddingLeft
+		breadcrumb = truncateWithEllipsis(breadcrumb, maxWidth)
+		descLeft = leftBase.Bold(false).Render(breadcrumb)
 	}
 
-	// Render as single styled block (padding handled by style)
-	// Always include desc line (even if empty) to maintain consistent height
-	content := titleLine + "\n" + desc
-	fmt.Fprintln(w, style.Render(content))
+	// Join columns per row, then stack rows
+	titleRow := lipgloss.JoinHorizontal(lipgloss.Top, titleLeft, indicatorRight)
+	descRow := lipgloss.JoinHorizontal(lipgloss.Top, descLeft, symbolsRight)
+
+	output := " " + blankLine + "\n" +
+		" " + titleRow + "\n" +
+		" " + descRow + "\n" +
+		" " + blankLine
+	fmt.Fprintln(w, output)
+}
+
+// truncateWithEllipsis truncates text to maxWidth, replacing the end with "…" if needed.
+func truncateWithEllipsis(text string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	w := lipgloss.Width(text)
+	if w <= maxWidth {
+		return text
+	}
+	runes := []rune(text)
+	for len(runes) > 0 {
+		runes = runes[:len(runes)-1]
+		if lipgloss.Width(string(runes)+"…") <= maxWidth {
+			return string(runes) + "…"
+		}
+	}
+	return "…"
 }
 
 // previewTickMsg is sent periodically to trigger preview refresh
@@ -578,6 +629,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The list is rendered in the left panel with a 1-cell border
 			// List panel starts at x=0, items start after title (around y=3 accounting for border and title)
 			listWidth := m.width*30/100 - 2
+			if listWidth < 25 {
+				listWidth = m.width - 4 // full width when preview hidden
+			}
 			if listWidth < 20 {
 				listWidth = 20
 			}
@@ -682,6 +736,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Calculate panel sizes (30% list, 70% preview, minus borders)
 		listWidth := m.width*30/100 - 2
+		if listWidth < 25 {
+			listWidth = m.width - 4 // full width when preview hidden
+		}
 		previewWidth := m.width*70/100 - 2
 		m.panelHeight = m.height - 2 // leave room for footer
 
@@ -1193,41 +1250,51 @@ func (m Model) View() string {
 
 	// Calculate panel widths
 	listWidth := m.width*30/100 - 2
-	previewWidth := m.width*70/100 - 2
-	if listWidth < 20 {
-		listWidth = 20
-	}
-	if previewWidth < 20 {
-		previewWidth = 20
-	}
+	showPreview := listWidth >= 25
 
-	// Build list panel
-	listPanel := listPanelStyle.
-		Width(listWidth).
-		Render(m.list.View())
+	var layout string
+	if showPreview {
+		previewWidth := m.width*70/100 - 2
+		if previewWidth < 20 {
+			previewWidth = 20
+		}
 
-	// Build preview panel
-	var previewContent string
-	if m.previewErr != nil {
-		previewContent = errorStyle.Render(fmt.Sprintf("Error: %v", m.previewErr))
-	} else if m.previewContent == "" {
-		previewContent = emptyStyle.Render("No content")
+		// Build list panel
+		listPanel := listPanelStyle.
+			Width(listWidth).
+			Render(m.list.View())
+
+		// Build preview panel
+		var previewContent string
+		if m.previewErr != nil {
+			previewContent = errorStyle.Render(fmt.Sprintf("Error: %v", m.previewErr))
+		} else if m.previewContent == "" {
+			previewContent = emptyStyle.Render("No content")
+		} else {
+			previewContent = m.viewport.View()
+		}
+
+		previewName := m.selectedPaneID
+		if item, ok := m.list.SelectedItem().(paneItem); ok {
+			previewName = item.Title()
+		}
+		previewTitle := previewTitleStyle.Render("Preview: " + previewName)
+		previewPanel := previewPanelStyle.
+			Width(previewWidth).
+			Render(previewTitle + "\n" + previewContent)
+
+		layout = lipgloss.JoinHorizontal(lipgloss.Top, listPanel, previewPanel)
 	} else {
-		previewContent = m.viewport.View()
+		// Narrow terminal: sidebar only, full width
+		listWidth = m.width - 4
+		if listWidth < 20 {
+			listWidth = 20
+		}
+		listPanel := listPanelStyle.
+			Width(listWidth).
+			Render(m.list.View())
+		layout = listPanel
 	}
-
-	// Get display name from selected pane item, fallback to pane ID
-	previewName := m.selectedPaneID
-	if item, ok := m.list.SelectedItem().(paneItem); ok {
-		previewName = item.Title()
-	}
-	previewTitle := previewTitleStyle.Render("Preview: " + previewName)
-	previewPanel := previewPanelStyle.
-		Width(previewWidth).
-		Render(previewTitle + "\n" + previewContent)
-
-	// Join panels horizontally
-	layout := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, previewPanel)
 
 	// Show mode-specific help/input
 	var footer string

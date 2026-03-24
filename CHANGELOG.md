@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-03-24
+
 - title in bold text #27
 - auto hide preview when page too narrow #26
 - fix incorrect busy symbol for user active pane #24

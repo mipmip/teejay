@@ -66,7 +66,7 @@ The project SHALL have a `scripts/release.sh` script for interactive release cre
 
 #### Scenario: Safety checks
 - **WHEN** release script runs
-- **THEN** it verifies: clean git working directory, on main branch, changelog has [Unreleased] section
+- **THEN** it verifies: clean git working directory, changelog has [Unreleased] section
 
 #### Scenario: Automated updates
 - **WHEN** release is confirmed
@@ -113,15 +113,11 @@ The release script SHALL provide an interactive dropdown to select the version b
 
 ### Requirement: Safety checks before release
 
-The release script SHALL verify preconditions before proceeding with a release.
+The release script SHALL verify preconditions before proceeding with a release. The checks SHALL work in both pure-git and jj-colocated repositories.
 
 #### Scenario: Dirty working directory
-- **WHEN** user runs release script with uncommitted changes
-- **THEN** the script exits with an error message about uncommitted changes
-
-#### Scenario: Not on main branch
-- **WHEN** user runs release script from a non-main branch
-- **THEN** the script exits with an error message about being on wrong branch
+- **WHEN** user runs release script with uncommitted changes (staged or unstaged)
+- **THEN** the script SHALL exit with an error message, detected via `git diff --quiet` and `git diff --cached --quiet`
 
 #### Scenario: Version tag already exists
 - **WHEN** user selects a version that already has a git tag
@@ -150,13 +146,14 @@ The release script SHALL update CHANGELOG.md with the new version and date.
 
 ### Requirement: Git tag creation and push
 
-The release script SHALL create a git tag and push changes.
+The release script SHALL create a git tag and push changes using commands that work in both pure-git and jj-colocated repos.
 
 #### Scenario: Successful release
 - **WHEN** user confirms the release
 - **THEN** the VERSION, changelog, and flake.nix changes are committed together
 - **AND** a git tag `vX.Y.Z` is created
-- **AND** changes and tag are pushed to remote
+- **AND** changes are pushed to remote main via `git push origin HEAD:main`
+- **AND** the tag is pushed via `git push origin vX.Y.Z`
 
 ### Requirement: Confirmation before release
 

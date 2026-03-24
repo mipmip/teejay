@@ -355,9 +355,11 @@ type Model struct {
 	configMenuItem  configMenuItem    // selected menu item in configure popup
 	configEditingName bool            // true when editing name in configure popup
 	watchlistMtime  time.Time         // last known modification time of watchlist file
-	statusMessage   string            // temporary status message to display to user
-	version         string            // app version for footer display
-	brandingShimmer int               // shimmer animation frame (0 = not animating)
+	statusMessage    string            // temporary status message to display to user
+	version          string            // app version for footer display
+	brandingShimmer  int               // shimmer animation frame (0 = not animating)
+	lastActivePanes  map[string]bool      // previously active pane IDs
+	paneFocusLostAt  map[string]time.Time // when each pane lost focus (for grace period)
 }
 
 // New creates a new Model with the given version, config, and optional watchlist path.
@@ -427,10 +429,12 @@ func New(version string, cfg *config.Config, watchlistPath string) Model {
 		monitor:        monitor.New(cfg),
 		config:         cfg,
 		paneStatuses:   make(map[string]monitor.PaneStatus),
-		paneCommands:   make(map[string]string),
-		empty:          len(items) == 0,
-		watchlistMtime: wlMtime,
-		version:        version,
+		paneCommands:    make(map[string]string),
+		lastActivePanes:  make(map[string]bool),
+		paneFocusLostAt: make(map[string]time.Time),
+		empty:           len(items) == 0,
+		watchlistMtime:  wlMtime,
+		version:         version,
 	}
 
 	// Capture initial pane content if there are panes
@@ -559,6 +563,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.checkWatchlistFileChange()
 
 			if !m.empty {
+				// Get all currently focused panes (may be multiple with multiple attached sessions)
+				activePanes := tmux.GetActivePaneIDs()
+
+				// Panes that were active last tick but are no longer → start grace period
+				for id := range m.lastActivePanes {
+					if !activePanes[id] {
+						m.paneFocusLostAt[id] = time.Now()
+					}
+				}
+				// Panes that gained focus → cancel any grace period
+				for id := range activePanes {
+					delete(m.paneFocusLostAt, id)
+				}
+				// Remember current active set for next tick
+				m.lastActivePanes = activePanes
+
+				// Clean up expired grace periods (> 2s) and reset monitor baseline
+				// so user-made content changes during the pause don't trigger Busy
+				for id, lostAt := range m.paneFocusLostAt {
+					if time.Since(lostAt) > 2*time.Second {
+						if content, err := tmux.CapturePane(id); err == nil {
+							m.monitor.ResetBaseline(id, content)
+						}
+						delete(m.paneFocusLostAt, id)
+					}
+				}
+
 				// Update status for ALL panes in the watchlist
 				for _, p := range m.watchlist.Panes {
 					content, err := tmux.CapturePane(p.ID)
@@ -570,19 +601,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						continue
 					}
 
-					// Get app name for this pane
-					appName := m.paneCommands[p.ID]
+					// Skip status monitoring for focused panes and panes in grace period
+					// (still capture content for preview)
+					isPaused := activePanes[p.ID]
+					if !isPaused {
+						if _, inGrace := m.paneFocusLostAt[p.ID]; inGrace {
+							isPaused = true
+						}
+					}
 
-					// Update status
-					prevStatus := m.paneStatuses[p.ID]
-					status := m.monitor.Update(p.ID, content, appName)
-					if prevStatus != status {
-						m.paneStatuses[p.ID] = status
-						// Check for Busy -> Waiting transition and trigger alerts
-						// Suppress alerts if the pane is currently focused by the user in tmux
-						if prevStatus == monitor.Busy && status == monitor.Waiting {
-							if activePaneID := tmux.GetActivePaneID(); activePaneID != p.ID {
-								m.triggerAlerts(p.ID)
+					if !isPaused {
+						// Get app name for this pane
+						appName := m.paneCommands[p.ID]
+
+						// Update status
+						prevStatus := m.paneStatuses[p.ID]
+						status := m.monitor.Update(p.ID, content, appName)
+						if prevStatus != status {
+							m.paneStatuses[p.ID] = status
+							// Check for Busy -> Waiting transition and trigger alerts
+							if prevStatus == monitor.Busy && status == monitor.Waiting {
+								if !activePanes[p.ID] {
+									m.triggerAlerts(p.ID)
+								}
 							}
 						}
 					}

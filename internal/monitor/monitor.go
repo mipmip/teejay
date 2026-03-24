@@ -90,6 +90,24 @@ func (m *Monitor) Update(paneID, content, appName string) PaneStatus {
 	return Busy
 }
 
+// ResetBaseline updates the stored content hash for a pane so the current
+// content is treated as the baseline. Use this after a monitoring pause
+// (e.g., user was typing) so that user-made changes don't trigger Busy.
+func (m *Monitor) ResetBaseline(paneID, content string) {
+	content = ansiRegex.ReplaceAllString(content, "")
+	hash := sha256.Sum256([]byte(content))
+	state, exists := m.panes[paneID]
+	if exists {
+		state.hash = hash
+		state.lastChangeTime = time.Now()
+	} else {
+		m.panes[paneID] = &paneState{
+			hash:           hash,
+			lastChangeTime: time.Now(),
+		}
+	}
+}
+
 // hasBusyString checks if content contains any of the busy strings.
 // Busy strings take precedence over waiting strings.
 func (m *Monitor) hasBusyString(content string, patterns []string) bool {

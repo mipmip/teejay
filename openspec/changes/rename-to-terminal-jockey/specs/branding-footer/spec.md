@@ -1,8 +1,5 @@
-# branding-footer Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change branding-footer. Update Purpose after archive.
-## Requirements
 ### Requirement: Display branded app name in footer
 
 The UI SHALL display "Terminal Jockey" text in the bottom-right corner of the screen with neon-style coloring.
@@ -45,4 +42,3 @@ The branding footer SHALL display the global alert configuration status as compa
 #### Scenario: Systray hidden on narrow terminals
 - **WHEN** the terminal width is less than 80 columns
 - **THEN** the alert status symbols SHALL NOT be displayed (same as branding footer)
-

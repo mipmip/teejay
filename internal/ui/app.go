@@ -1385,9 +1385,9 @@ func renderAlertIndicators(soundEnabled, notifyEnabled bool) string {
 	return sound + " " + notify
 }
 
-// renderBrandingFooter returns the "Terminal Junkie" branding with version
+// renderBrandingFooter returns the "Terminal Jockey" branding with version
 func (m Model) renderBrandingFooter() string {
-	text := "Terminal Junkie"
+	text := "Terminal Jockey"
 	var brand string
 
 	if m.brandingShimmer > 0 {

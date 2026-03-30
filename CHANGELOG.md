@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- rename to Terminal Jockey
+- multi-column layout mode: press `v` to toggle between list+preview and multi-column view
+- left/right arrow keys navigate between columns in multi-column mode
+
 ## [0.2.8] - 2026-03-24
 
 - title in bold text #27

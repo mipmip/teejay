@@ -192,6 +192,12 @@ func truncateWithEllipsis(text string, maxWidth int) string {
 	return "…"
 }
 
+// Layout modes
+const (
+	layoutDefault     = 0
+	layoutMultiColumn = 1
+)
+
 // previewTickMsg is sent periodically to trigger preview refresh
 type previewTickMsg struct{}
 
@@ -360,6 +366,7 @@ type Model struct {
 	brandingShimmer  int               // shimmer animation frame (0 = not animating)
 	lastActivePanes  map[string]bool      // previously active pane IDs
 	paneFocusLostAt  map[string]time.Time // when each pane lost focus (for grace period)
+	layoutMode       int                  // 0 = default (list+preview), 1 = multi-column
 }
 
 // New creates a new Model with the given version, config, and optional watchlist path.
@@ -747,6 +754,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadBrowserPanes()
 			m.browsing = true
 			return m, nil
+		case "v":
+			// Toggle layout mode
+			if m.layoutMode == layoutDefault {
+				m.layoutMode = layoutMultiColumn
+			} else {
+				m.layoutMode = layoutDefault
+			}
+			return m, nil
 		case "s":
 			// Scan for agent panes and auto-add
 			allPanes, err := tmux.ListAllPanes()
@@ -775,19 +790,86 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Calculate panel sizes (30% list, 70% preview, minus borders)
-		listWidth := m.width*30/100 - 2
-		if listWidth < 25 {
-			listWidth = m.width - 4 // full width when preview hidden
-		}
-		previewWidth := m.width*70/100 - 2
 		m.panelHeight = m.height - 2 // leave room for footer
 
-		// List height: panel - border(2) - title(2) - pagination(1)
-		m.list.SetWidth(listWidth)
-		m.list.SetHeight(m.panelHeight - 5)
-		m.viewport.Width = previewWidth
-		m.viewport.Height = m.panelHeight - 4 // border (2) + title (2)
+		if m.layoutMode == layoutMultiColumn {
+			// Multi-column: list gets full width (rendering is manual)
+			listWidth := m.width - 4
+			m.list.SetWidth(listWidth)
+			m.list.SetHeight(m.panelHeight - 5)
+		} else {
+			// Default: 30% list, 70% preview
+			listWidth := m.width*30/100 - 2
+			if listWidth < 25 {
+				listWidth = m.width - 4 // full width when preview hidden
+			}
+			previewWidth := m.width*70/100 - 2
+			m.list.SetWidth(listWidth)
+			m.list.SetHeight(m.panelHeight - 5)
+			m.viewport.Width = previewWidth
+			m.viewport.Height = m.panelHeight - 4 // border (2) + title (2)
+		}
+	}
+
+	// In multi-column mode, intercept arrow keys for spatial navigation
+	if m.layoutMode == layoutMultiColumn {
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			items := m.list.Items()
+			if len(items) > 0 {
+				mc := calcMultiColumn(m.width-4, len(items))
+				col, row := mc.colRow(m.list.Index())
+				handled := false
+
+				switch keyMsg.String() {
+				case "up", "k":
+					if row > 0 {
+						m.list.Select(mc.flatIndex(col, row-1))
+					}
+					handled = true
+				case "down", "j":
+					newIdx := mc.flatIndex(col, row+1)
+					if row+1 < mc.itemsPerCol && newIdx < len(items) {
+						m.list.Select(newIdx)
+					}
+					handled = true
+				case "left", "h":
+					if col > 0 {
+						newIdx := mc.flatIndex(col-1, row)
+						if newIdx < len(items) {
+							m.list.Select(newIdx)
+						}
+					}
+					handled = true
+				case "right", "l":
+					if col+1 < mc.numColumns {
+						newIdx := mc.flatIndex(col+1, row)
+						if newIdx >= len(items) {
+							// Jump to last item in that column
+							lastInCol := mc.flatIndex(col+1, mc.itemsPerCol-1)
+							for lastInCol >= len(items) {
+								lastInCol--
+							}
+							if lastInCol > mc.flatIndex(col+1, 0)-1 {
+								m.list.Select(lastInCol)
+							}
+						} else {
+							m.list.Select(newIdx)
+						}
+					}
+					handled = true
+				}
+
+				if handled {
+					if item, ok := m.list.SelectedItem().(paneItem); ok {
+						if item.id != m.selectedPaneID {
+							m.selectedPaneID = item.id
+							m.captureSelectedPane()
+						}
+					}
+					return m, nil
+				}
+			}
+		}
 	}
 
 	// Track previous selection
@@ -1289,52 +1371,57 @@ func (m Model) View() string {
 		return m.renderConfigurePopup()
 	}
 
-	// Calculate panel widths
-	listWidth := m.width*30/100 - 2
-	showPreview := listWidth >= 25
-
 	var layout string
-	if showPreview {
-		previewWidth := m.width*70/100 - 2
-		if previewWidth < 20 {
-			previewWidth = 20
-		}
-
-		// Build list panel
-		listPanel := listPanelStyle.
-			Width(listWidth).
-			Render(m.list.View())
-
-		// Build preview panel
-		var previewContent string
-		if m.previewErr != nil {
-			previewContent = errorStyle.Render(fmt.Sprintf("Error: %v", m.previewErr))
-		} else if m.previewContent == "" {
-			previewContent = emptyStyle.Render("No content")
-		} else {
-			previewContent = m.viewport.View()
-		}
-
-		previewName := m.selectedPaneID
-		if item, ok := m.list.SelectedItem().(paneItem); ok {
-			previewName = item.Title()
-		}
-		previewTitle := previewTitleStyle.Render("Preview: " + previewName)
-		previewPanel := previewPanelStyle.
-			Width(previewWidth).
-			Render(previewTitle + "\n" + previewContent)
-
-		layout = lipgloss.JoinHorizontal(lipgloss.Top, listPanel, previewPanel)
+	if m.layoutMode == layoutMultiColumn {
+		// Multi-column mode: no preview, fill width with columns
+		layout = m.renderMultiColumnLayout()
 	} else {
-		// Narrow terminal: sidebar only, full width
-		listWidth = m.width - 4
-		if listWidth < 20 {
-			listWidth = 20
+		// Default mode: list + preview
+		listWidth := m.width*30/100 - 2
+		showPreview := listWidth >= 25
+
+		if showPreview {
+			previewWidth := m.width*70/100 - 2
+			if previewWidth < 20 {
+				previewWidth = 20
+			}
+
+			// Build list panel
+			listPanel := listPanelStyle.
+				Width(listWidth).
+				Render(m.list.View())
+
+			// Build preview panel
+			var previewContent string
+			if m.previewErr != nil {
+				previewContent = errorStyle.Render(fmt.Sprintf("Error: %v", m.previewErr))
+			} else if m.previewContent == "" {
+				previewContent = emptyStyle.Render("No content")
+			} else {
+				previewContent = m.viewport.View()
+			}
+
+			previewName := m.selectedPaneID
+			if item, ok := m.list.SelectedItem().(paneItem); ok {
+				previewName = item.Title()
+			}
+			previewTitle := previewTitleStyle.Render("Preview: " + previewName)
+			previewPanel := previewPanelStyle.
+				Width(previewWidth).
+				Render(previewTitle + "\n" + previewContent)
+
+			layout = lipgloss.JoinHorizontal(lipgloss.Top, listPanel, previewPanel)
+		} else {
+			// Narrow terminal: sidebar only, full width
+			listWidth = m.width - 4
+			if listWidth < 20 {
+				listWidth = 20
+			}
+			listPanel := listPanelStyle.
+				Width(listWidth).
+				Render(m.list.View())
+			layout = listPanel
 		}
-		listPanel := listPanelStyle.
-			Width(listWidth).
-			Render(m.list.View())
-		layout = listPanel
 	}
 
 	// Show mode-specific help/input
@@ -1350,9 +1437,9 @@ func (m Model) View() string {
 	} else if m.temporaryMessage != "" {
 		footer = errorStyle.Render(m.temporaryMessage) + "\n" + helpStyle.Render("Press Esc to dismiss")
 	} else if m.statusMessage != "" {
-		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • a: add • s: scan • c: configure • d: delete • q: quit")
+		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • v: view • a: add • s: scan • c: configure • d: delete • q: quit")
 	} else {
-		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • a: add • s: scan • c: configure • d: delete • q: quit")
+		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • v: view • a: add • s: scan • c: configure • d: delete • q: quit")
 	}
 
 	// Add branding to footer line if terminal is wide enough
@@ -1367,6 +1454,130 @@ func (m Model) View() string {
 	}
 
 	return layout + "\n" + footer
+}
+
+// multiColumnInfo holds layout calculations for the multi-column view.
+type multiColumnInfo struct {
+	numColumns    int
+	itemsPerCol   int
+	colWidth      int
+	totalItems    int
+}
+
+// calcMultiColumn computes column layout from available width and item count.
+func calcMultiColumn(availableWidth, totalItems int) multiColumnInfo {
+	const minColWidth = 30
+	numColumns := availableWidth / minColWidth
+	if numColumns < 1 {
+		numColumns = 1
+	}
+	colWidth := availableWidth / numColumns
+	itemsPerCol := totalItems / numColumns
+	if totalItems%numColumns != 0 {
+		itemsPerCol++
+	}
+	return multiColumnInfo{
+		numColumns:  numColumns,
+		itemsPerCol: itemsPerCol,
+		colWidth:    colWidth,
+		totalItems:  totalItems,
+	}
+}
+
+// multiColumnIndex converts (column, row) to flat list index.
+func (mc multiColumnInfo) flatIndex(col, row int) int {
+	return col*mc.itemsPerCol + row
+}
+
+// multiColumnPos converts a flat list index to (column, row).
+func (mc multiColumnInfo) colRow(index int) (int, int) {
+	if mc.itemsPerCol == 0 {
+		return 0, 0
+	}
+	return index / mc.itemsPerCol, index % mc.itemsPerCol
+}
+
+// renderMultiColumnLayout renders all pane items in a multi-column grid.
+func (m Model) renderMultiColumnLayout() string {
+	items := m.list.Items()
+	if len(items) == 0 {
+		return emptyStyle.Render("No panes are being watched.")
+	}
+
+	availableWidth := m.width - 4 // border space
+	mc := calcMultiColumn(availableWidth, len(items))
+	selectedIndex := m.list.Index()
+
+	columns := make([]string, mc.numColumns)
+	for col := 0; col < mc.numColumns; col++ {
+		var rows []string
+		for row := 0; row < mc.itemsPerCol; row++ {
+			idx := mc.flatIndex(col, row)
+			if idx >= len(items) {
+				// Render empty space to keep columns aligned
+				blankLine := lipgloss.NewStyle().Width(mc.colWidth - 2).Render("")
+				rows = append(rows, blankLine+"\n"+blankLine+"\n"+blankLine+"\n"+blankLine)
+				continue
+			}
+
+			item := items[idx]
+			isSelected := idx == selectedIndex
+			rows = append(rows, m.renderMultiColumnItem(item, mc.colWidth-2, isSelected))
+		}
+		columns[col] = lipgloss.JoinVertical(lipgloss.Left, rows...)
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+}
+
+// renderMultiColumnItem renders a single pane item for the multi-column layout.
+func (m Model) renderMultiColumnItem(item list.Item, contentWidth int, isSelected bool) string {
+	i, ok := item.(paneItem)
+	if !ok {
+		return ""
+	}
+
+	bgColor := lipgloss.Color("#333333")
+	if isSelected {
+		bgColor = lipgloss.Color("#555555")
+	}
+
+	const rightColWidth = 7
+	leftColWidth := contentWidth - rightColWidth
+
+	blankLine := lipgloss.NewStyle().Background(bgColor).Width(contentWidth).Render("")
+	leftBase := lipgloss.NewStyle().Background(bgColor).PaddingLeft(2).Width(leftColWidth)
+	rightBase := lipgloss.NewStyle().Background(bgColor).Width(rightColWidth).PaddingLeft(1).PaddingRight(1).Align(lipgloss.Right)
+
+	maxTextWidth := leftColWidth - 2
+	titleLeft := leftBase.Bold(true).Render(truncateWithEllipsis(i.Title(), maxTextWidth))
+
+	// Indicator
+	indicatorText := i.status.IndicatorAnimated(i.frame)
+	indicatorStyle := rightBase
+	if i.status == monitor.Waiting {
+		indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#00FF00"))
+	}
+	indicatorRight := indicatorStyle.Render(indicatorText)
+
+	// Alert symbols
+	symbolsRight := rightBase.Render(" ")
+	if i.soundOverride != nil || i.notifyOverride != nil {
+		symbolsRight = rightBase.Render("♪ ✉ ")
+	}
+
+	// Breadcrumb
+	breadcrumb := i.session + " > " + i.windowName
+	if i.command != "" {
+		breadcrumb += " : " + i.command
+	}
+	breadcrumb = truncateWithEllipsis(breadcrumb, maxTextWidth)
+	descLeft := leftBase.Bold(false).Render(breadcrumb)
+
+	titleRow := lipgloss.JoinHorizontal(lipgloss.Top, titleLeft, indicatorRight)
+	descRow := lipgloss.JoinHorizontal(lipgloss.Top, descLeft, symbolsRight)
+
+	return blankLine + "\n" + titleRow + "\n" + descRow + "\n" + blankLine
 }
 
 // renderAlertIndicators returns styled ♪ ✉ symbols based on enabled state.

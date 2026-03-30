@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- fix: escape no longer quits the app (only `q` and `ctrl+c` quit)
 - rename to Terminal Jockey
 - multi-column layout mode: press `v` to toggle between list+preview and multi-column view
 - left/right arrow keys navigate between columns in multi-column mode
+- quick-answer popup: press `space` on a waiting pane to respond without switching
+- Claude Code transcript-based prompt recognition (structured, version-resistant)
+- `?` indicator for panes waiting with an actionable question (yellow) vs idle `●` (green)
+- screen-scraping fallback for non-Claude agents
+- freshness check before sending responses to prevent answering stale prompts
+- multi-column layout: preview panel shown below columns when vertical space allows
 
 ## [0.2.8] - 2026-03-24
 

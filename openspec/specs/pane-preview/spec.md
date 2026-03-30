@@ -5,7 +5,7 @@ TBD - created by archiving change tui-pane-preview. Update Purpose after archive
 ## Requirements
 ### Requirement: Split-panel layout
 
-The TUI SHALL display a split-panel layout with the pane list on the left and preview on the right.
+The TUI SHALL display a split-panel layout with the pane list on the left and preview on the right when in default layout mode.
 
 #### Scenario: Layout displays correctly
 - **WHEN** the TUI starts with panes in the watchlist
@@ -80,9 +80,30 @@ The main view SHALL hide the preview panel when the calculated sidebar width (30
 
 #### Scenario: Wide terminal shows preview
 - **WHEN** the terminal width results in a sidebar width of 25 characters or more at the 30% split
+- **AND** the layout mode is default
 - **THEN** both sidebar (30%) and preview (70%) panels SHALL be displayed
 
 #### Scenario: Resizing toggles preview
 - **WHEN** the terminal is resized across the breakpoint threshold
 - **THEN** the preview panel SHALL appear or disappear accordingly on the next render
+
+#### Scenario: Multi-column mode hides preview
+- **WHEN** the layout mode is multi-column
+- **THEN** the preview panel SHALL NOT be displayed regardless of terminal width
+
+### Requirement: Preview in horizontal orientation
+
+The preview panel SHALL support rendering below the content area (horizontal orientation) in addition to the existing side-by-side orientation.
+
+#### Scenario: Below-preview uses full width
+- **WHEN** the preview is rendered in horizontal orientation (multi-column mode)
+- **THEN** the preview panel SHALL use the full terminal width minus borders
+
+#### Scenario: Below-preview uses remaining height
+- **WHEN** the preview is rendered in horizontal orientation
+- **THEN** the preview panel height SHALL fill the remaining vertical space after the column grid and footer
+
+#### Scenario: Visual consistency with side preview
+- **WHEN** the below-preview is rendered
+- **THEN** it SHALL use the same border style and title format as the side preview ("Preview: \<pane name\>")
 

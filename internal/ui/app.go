@@ -19,6 +19,7 @@ import (
 	"tj/internal/config"
 	"tj/internal/monitor"
 	"tj/internal/naming"
+	"tj/internal/prompt"
 	"tj/internal/scan"
 	"tj/internal/tmux"
 	"tj/internal/watchlist"
@@ -143,7 +144,12 @@ func (d browserItemDelegate) Render(w io.Writer, m list.Model, index int, item l
 		indicatorText := p.status.IndicatorAnimated(p.frame)
 		indicatorStyle := rightBase
 		if p.status == monitor.Waiting {
-			indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#00FF00"))
+			if p.promptInfo.Type.IsActionable() {
+				indicatorText = "?"
+				indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#FFD700")) // Yellow
+			} else {
+				indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#00FF00"))
+			}
 		}
 		indicatorRight = indicatorStyle.Render(indicatorText)
 
@@ -201,6 +207,11 @@ const (
 // previewTickMsg is sent periodically to trigger preview refresh
 type previewTickMsg struct{}
 
+// promptCheckResultMsg carries the results of an async prompt recognition check.
+type promptCheckResultMsg struct {
+	results map[string]prompt.PromptInfo
+}
+
 // dismissTemporaryMsg is sent to auto-dismiss temporary messages after timeout
 type dismissTemporaryMsg struct{}
 
@@ -236,6 +247,7 @@ type paneItem struct {
 	windowName     string // tmux window name
 	soundOverride  *bool  // per-pane sound override (nil = inheriting global)
 	notifyOverride *bool  // per-pane notification override (nil = inheriting global)
+	promptInfo     prompt.PromptInfo // parsed prompt state when waiting
 }
 
 func (p paneItem) Title() string {
@@ -364,9 +376,16 @@ type Model struct {
 	statusMessage    string            // temporary status message to display to user
 	version          string            // app version for footer display
 	brandingShimmer  int               // shimmer animation frame (0 = not animating)
-	lastActivePanes  map[string]bool      // previously active pane IDs
-	paneFocusLostAt  map[string]time.Time // when each pane lost focus (for grace period)
-	layoutMode       int                  // 0 = default (list+preview), 1 = multi-column
+	lastActivePanes  map[string]bool          // previously active pane IDs
+	paneFocusLostAt  map[string]time.Time     // when each pane lost focus (for grace period)
+	layoutMode       int                      // 0 = default (list+preview), 1 = multi-column
+	panePrompts      map[string]prompt.PromptInfo // cached prompt info per pane
+	promptCheckTick  int                      // counter for periodic prompt checking
+	quickAnswering     bool              // true when quick-answer popup is open
+	quickAnswerPane    string            // pane ID being answered
+	quickAnswerPrompt  prompt.PromptInfo // prompt being answered
+	quickAnswerSelected int             // selected option index (for Permission/Choice)
+	quickAnswerInput   textinput.Model  // text input for Question/FreeInput
 }
 
 // New creates a new Model with the given version, config, and optional watchlist path.
@@ -393,6 +412,7 @@ func New(version string, cfg *config.Config, watchlistPath string) Model {
 		l.SetShowStatusBar(false)
 		l.SetFilteringEnabled(false)
 		l.SetShowHelp(false)
+		l.KeyMap.Quit.SetEnabled(false)
 		vp := viewport.New(50, 20)
 		return Model{loadErr: err, version: version, config: cfg, list: l, viewport: vp}
 	}
@@ -419,6 +439,7 @@ func New(version string, cfg *config.Config, watchlistPath string) Model {
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
 	l.SetShowHelp(false)
+	l.KeyMap.Quit.SetEnabled(false)
 	l.SetShowPagination(true)
 	l.Styles.Title = titleStyle
 
@@ -439,6 +460,7 @@ func New(version string, cfg *config.Config, watchlistPath string) Model {
 		paneCommands:    make(map[string]string),
 		lastActivePanes:  make(map[string]bool),
 		paneFocusLostAt: make(map[string]time.Time),
+		panePrompts:     make(map[string]prompt.PromptInfo),
 		empty:           len(items) == 0,
 		watchlistMtime:  wlMtime,
 		version:         version,
@@ -565,6 +587,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Skip refresh when in modal modes
+		var promptCmd tea.Cmd
 		if !m.editing && !m.deleting && !m.browsing && !m.configuring {
 			// Check if watchlist file has been modified externally
 			m.checkWatchlistFileChange()
@@ -643,11 +666,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
+				// Periodic prompt check (~2s = every 20 ticks) — async
+				m.promptCheckTick++
+				if m.promptCheckTick >= 20 {
+					m.promptCheckTick = 0
+					// Snapshot waiting panes and their app names for the goroutine
+					type paneCheck struct {
+						id      string
+						appName string
+					}
+					var checks []paneCheck
+					for _, p := range m.watchlist.Panes {
+						if m.paneStatuses[p.ID] == monitor.Waiting {
+							checks = append(checks, paneCheck{id: p.ID, appName: m.paneCommands[p.ID]})
+						} else {
+							delete(m.panePrompts, p.ID)
+						}
+					}
+					if len(checks) > 0 {
+						promptCmd = func() tea.Msg {
+							results := make(map[string]prompt.PromptInfo, len(checks))
+							for _, c := range checks {
+								results[c.id] = prompt.Recognize(c.id, c.appName)
+							}
+							return promptCheckResultMsg{results: results}
+						}
+					}
+				}
+
 				// Always refresh list to update spinner animation
 				m.refreshListWithFrame(m.tickFrame)
 			}
 		}
+		if promptCmd != nil {
+			return m, tea.Batch(tickCmd(), promptCmd)
+		}
 		return m, tickCmd()
+	}
+
+	// Handle promptCheckResultMsg — apply async prompt recognition results
+	if msg, ok := msg.(promptCheckResultMsg); ok {
+		for id, info := range msg.results {
+			m.panePrompts[id] = info
+		}
+		m.refreshListWithFrame(m.tickFrame)
+		return m, nil
 	}
 
 	// Handle edit mode
@@ -658,6 +721,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle delete confirmation mode
 	if m.deleting {
 		return m.updateDeleting(msg)
+	}
+
+	// Handle quick-answer mode
+	if m.quickAnswering {
+		return m.updateQuickAnswer(msg)
 	}
 
 	// Handle browsing mode
@@ -747,8 +815,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Clear any temporary messages
 			if m.temporaryMessage != "" {
 				m.temporaryMessage = ""
-				return m, nil
 			}
+			return m, nil
 		case "a":
 			// Open pane browser
 			m.loadBrowserPanes()
@@ -762,6 +830,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.layoutMode = layoutDefault
 			}
 			return m, nil
+		case " ":
+			// Open quick-answer popup for waiting panes
+			if !m.empty && m.selectedPaneID != "" && m.paneStatuses[m.selectedPaneID] == monitor.Waiting {
+				appName := m.paneCommands[m.selectedPaneID]
+				info := prompt.Recognize(m.selectedPaneID, appName)
+				m.quickAnswering = true
+				m.quickAnswerPane = m.selectedPaneID
+				m.quickAnswerPrompt = info
+				m.quickAnswerSelected = 0
+				m.quickAnswerInput = textinput.New()
+				m.quickAnswerInput.Focus()
+				m.quickAnswerInput.Placeholder = "Type your response..."
+				return m, textinput.Blink
+			}
 		case "s":
 			// Scan for agent panes and auto-add
 			allPanes, err := tmux.ListAllPanes()
@@ -797,6 +879,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			listWidth := m.width - 4
 			m.list.SetWidth(listWidth)
 			m.list.SetHeight(m.panelHeight - 5)
+			// Set viewport width for below-preview (height set dynamically in render)
+			m.viewport.Width = m.width - 6 // full width minus border + panel border
 		} else {
 			// Default: 30% list, 70% preview
 			listWidth := m.width*30/100 - 2
@@ -913,6 +997,85 @@ func (m Model) updateEditing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.textInput, cmd = m.textInput.Update(msg)
 	return m, cmd
+}
+
+func (m Model) updateQuickAnswer(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		hasOptions := len(m.quickAnswerPrompt.Options) > 0
+
+		switch msg.String() {
+		case "esc":
+			m.quickAnswering = false
+			return m, nil
+		case "enter":
+			// Determine what we'd send
+			var response string
+			if hasOptions {
+				if m.quickAnswerSelected >= 0 && m.quickAnswerSelected < len(m.quickAnswerPrompt.Options) {
+					response = m.quickAnswerPrompt.Options[m.quickAnswerSelected].Key
+				}
+			} else {
+				response = m.quickAnswerInput.Value()
+			}
+
+			// Freshness check: re-verify pane is still waiting
+			status := m.paneStatuses[m.quickAnswerPane]
+			if status != monitor.Waiting {
+				m.quickAnswering = false
+				return m, m.showTemporaryMessage(fmt.Sprintf("Prompt expired — status=%v (not Waiting), would send %q", status, response))
+			}
+
+			// For Claude: re-check transcript for same tool_use ID
+			if m.quickAnswerPrompt.ToolUseID != "" {
+				appName := m.paneCommands[m.quickAnswerPane]
+				freshInfo := prompt.Recognize(m.quickAnswerPane, appName)
+				if freshInfo.ToolUseID != m.quickAnswerPrompt.ToolUseID {
+					m.quickAnswering = false
+					return m, m.showTemporaryMessage(fmt.Sprintf("Prompt expired — tool_use_id changed: %q → %q", m.quickAnswerPrompt.ToolUseID[:8], freshInfo.ToolUseID))
+				}
+			}
+
+			// Send response using the appropriate method based on prompt type
+			var err error
+			switch m.quickAnswerPrompt.Type {
+			case prompt.Permission, prompt.Choice:
+				// Both permission and choice prompts are interactive lists in Claude Code —
+				// navigate with arrow keys then press Enter to select
+				err = tmux.SendArrowAndEnter(m.quickAnswerPane, m.quickAnswerSelected)
+			default:
+				// Free text: send the full line + Enter
+				if response != "" {
+					err = tmux.SendKeys(m.quickAnswerPane, response)
+				}
+			}
+			if err != nil {
+				m.quickAnswering = false
+				return m, m.showTemporaryMessage(fmt.Sprintf("Send failed: %v", err))
+			}
+			m.quickAnswering = false
+			m.statusMessage = fmt.Sprintf("Sent %q to %s", response, m.quickAnswerPane)
+			return m, nil
+		case "up", "k":
+			if hasOptions && m.quickAnswerSelected > 0 {
+				m.quickAnswerSelected--
+			}
+			return m, nil
+		case "down", "j":
+			if hasOptions && m.quickAnswerSelected < len(m.quickAnswerPrompt.Options)-1 {
+				m.quickAnswerSelected++
+			}
+			return m, nil
+		default:
+			if !hasOptions {
+				// Forward to text input
+				var cmd tea.Cmd
+				m.quickAnswerInput, cmd = m.quickAnswerInput.Update(msg)
+				return m, cmd
+			}
+		}
+	}
+	return m, nil
 }
 
 func (m Model) updateDeleting(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1233,7 +1396,7 @@ func (m *Model) refreshListWithFrame(frame int) {
 			session = info.Session
 			windowName = info.WindowName
 		}
-		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: status, frame: frame, command: command, session: session, windowName: windowName, soundOverride: p.SoundOnReady, notifyOverride: p.NotifyOnReady}
+		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: status, frame: frame, command: command, session: session, windowName: windowName, soundOverride: p.SoundOnReady, notifyOverride: p.NotifyOnReady, promptInfo: m.panePrompts[p.ID]}
 	}
 	m.list.SetItems(items)
 	m.empty = len(items) == 0
@@ -1316,6 +1479,7 @@ func (m *Model) loadSessionList() {
 	m.browserList.SetShowStatusBar(false)
 	m.browserList.SetFilteringEnabled(false)
 	m.browserList.SetShowHelp(false)
+	m.browserList.KeyMap.Quit.SetEnabled(false)
 	m.browserList.Styles.Title = browserTitleStyle
 
 	m.browserEmpty = len(items) == 0
@@ -1339,6 +1503,7 @@ func (m *Model) loadPaneListForSession(sessionName string) {
 	m.browserList.SetShowStatusBar(false)
 	m.browserList.SetFilteringEnabled(false)
 	m.browserList.SetShowHelp(false)
+	m.browserList.KeyMap.Quit.SetEnabled(false)
 	m.browserList.Styles.Title = browserTitleStyle
 
 	m.browsingSession = false
@@ -1359,6 +1524,11 @@ func (m Model) View() string {
 			emptyStyle.Render("No panes are being watched.") + "\n\n" +
 			helpStyle.Render("Press 'a' to browse and add panes, or run 'tj add' in a tmux pane.") + "\n\n" +
 			helpStyle.Render("Press q to quit.")
+	}
+
+	// Handle quick-answer popup
+	if m.quickAnswering {
+		return m.renderQuickAnswerPopup()
 	}
 
 	// Handle browsing popup
@@ -1437,9 +1607,9 @@ func (m Model) View() string {
 	} else if m.temporaryMessage != "" {
 		footer = errorStyle.Render(m.temporaryMessage) + "\n" + helpStyle.Render("Press Esc to dismiss")
 	} else if m.statusMessage != "" {
-		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • v: view • a: add • s: scan • c: configure • d: delete • q: quit")
+		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • space: answer • v: view • a: add • s: scan • c: configure • d: delete • q: quit")
 	} else {
-		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • v: view • a: add • s: scan • c: configure • d: delete • q: quit")
+		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • space: answer • v: view • a: add • s: scan • c: configure • d: delete • q: quit")
 	}
 
 	// Add branding to footer line if terminal is wide enough
@@ -1497,7 +1667,10 @@ func (mc multiColumnInfo) colRow(index int) (int, int) {
 	return index / mc.itemsPerCol, index % mc.itemsPerCol
 }
 
-// renderMultiColumnLayout renders all pane items in a multi-column grid.
+const minPreviewBelowHeight = 8 // minimum lines to show the below-preview
+
+// renderMultiColumnLayout renders all pane items in a multi-column grid,
+// with an optional preview panel below when vertical space allows.
 func (m Model) renderMultiColumnLayout() string {
 	items := m.list.Items()
 	if len(items) == 0 {
@@ -1527,7 +1700,42 @@ func (m Model) renderMultiColumnLayout() string {
 		columns[col] = lipgloss.JoinVertical(lipgloss.Left, rows...)
 	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+	grid := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+
+	// Calculate remaining vertical space for optional below-preview
+	gridHeight := mc.itemsPerCol * 4 // each item is 4 lines
+	footerHeight := 2                // help line + branding line
+	remainingHeight := m.height - gridHeight - footerHeight
+
+	if remainingHeight >= minPreviewBelowHeight {
+		// Render preview panel below the grid
+		previewWidth := m.width - 4
+
+		var previewContent string
+		if m.previewErr != nil {
+			previewContent = errorStyle.Render(fmt.Sprintf("Error: %v", m.previewErr))
+		} else if m.previewContent == "" {
+			previewContent = emptyStyle.Render("No content")
+		} else {
+			m.viewport.Width = previewWidth - 2 // subtract border
+			m.viewport.Height = remainingHeight - 4 // subtract border (2) + title (2)
+			previewContent = m.viewport.View()
+		}
+
+		previewName := m.selectedPaneID
+		if item, ok := m.list.SelectedItem().(paneItem); ok {
+			previewName = item.Title()
+		}
+		previewTitle := previewTitleStyle.Render("Preview: " + previewName)
+		previewPanel := previewPanelStyle.
+			Width(previewWidth).
+			Height(remainingHeight - 2). // subtract border
+			Render(previewTitle + "\n" + previewContent)
+
+		return lipgloss.JoinVertical(lipgloss.Left, grid, previewPanel)
+	}
+
+	return grid
 }
 
 // renderMultiColumnItem renders a single pane item for the multi-column layout.
@@ -1556,7 +1764,12 @@ func (m Model) renderMultiColumnItem(item list.Item, contentWidth int, isSelecte
 	indicatorText := i.status.IndicatorAnimated(i.frame)
 	indicatorStyle := rightBase
 	if i.status == monitor.Waiting {
-		indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#00FF00"))
+		if i.promptInfo.Type.IsActionable() {
+			indicatorText = "?"
+			indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#FFD700"))
+		} else {
+			indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#00FF00"))
+		}
 	}
 	indicatorRight := indicatorStyle.Render(indicatorText)
 
@@ -1632,6 +1845,74 @@ func (m Model) renderBrandingFooter() string {
 	ver := versionStyle.Render(" " + m.version)
 	alerts := " " + renderAlertIndicators(m.config.Alerts.SoundOnReady, m.config.Alerts.NotifyOnReady)
 	return brand + ver + alerts
+}
+
+// renderQuickAnswerPopup renders the quick-answer popup for responding to agent prompts.
+func (m Model) renderQuickAnswerPopup() string {
+	p := m.quickAnswerPrompt
+	popupWidth := m.width * 60 / 100
+	if popupWidth < 40 {
+		popupWidth = m.width - 4
+	}
+
+	// Title
+	paneName := m.quickAnswerPane
+	for _, wp := range m.watchlist.Panes {
+		if wp.ID == m.quickAnswerPane && wp.Name != "" {
+			paneName = wp.Name
+			break
+		}
+	}
+	title := browserTitleStyle.Render("Quick Answer: " + paneName)
+
+	// Context/question
+	var content string
+	switch p.Type {
+	case prompt.Permission:
+		toolDesc := p.ToolName
+		if p.ToolSummary != "" {
+			summary := p.ToolSummary
+			maxW := popupWidth - 10
+			if len(summary) > maxW {
+				summary = summary[:maxW-3] + "..."
+			}
+			toolDesc += " on " + summary
+		}
+		content = lipgloss.NewStyle().Bold(true).Render(toolDesc) + "\n\n"
+	case prompt.Question, prompt.Choice:
+		if p.QuestionText != "" {
+			content = p.QuestionText + "\n\n"
+		}
+	case prompt.FreeInput:
+		content = helpStyle.Render("Agent is waiting for input") + "\n\n"
+	default:
+		content = helpStyle.Render("Agent is waiting") + "\n\n"
+	}
+
+	// Options or text input
+	hasOptions := len(p.Options) > 0
+	if hasOptions {
+		for i, opt := range p.Options {
+			cursor := "  "
+			style := lipgloss.NewStyle()
+			if i == m.quickAnswerSelected {
+				cursor = ">"
+				style = style.Bold(true).Foreground(lipgloss.Color("#7D56F4"))
+			}
+			content += fmt.Sprintf(" %s %s  %s\n", cursor, opt.Key, style.Render(opt.Label))
+		}
+		content += "\n" + helpStyle.Render("↑/↓: select • Enter: send • Esc: cancel")
+	} else {
+		content += m.quickAnswerInput.View() + "\n\n"
+		content += helpStyle.Render("Enter: send • Esc: cancel")
+	}
+
+	popup := browserPopupStyle.
+		Width(popupWidth).
+		Render(title + "\n" + content)
+
+	// Center the popup
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, popup)
 }
 
 func (m Model) renderBrowserPopup() string {

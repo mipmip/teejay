@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-03-30
+
 - fix: escape no longer quits the app (only `q` and `ctrl+c` quit)
 - rename to Terminal Jockey
 - multi-column layout mode: press `v` to toggle between list+preview and multi-column view

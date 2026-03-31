@@ -33,66 +33,145 @@ Commands:
   del         Remove the current tmux pane from the watchlist
   scan        Scan all panes and add those running known agents
 
-Flags:
+General:
   -h, --help              Show this help message
   -v, --version           Show version
   -c, --config <path>     Path to config file
   -w, --watchlist <path>  Path to watchlist file
 
+Alerts:
+  --sound                 Enable sound alerts
+  --no-sound              Disable sound alerts
+  --notify                Enable desktop notifications
+  --no-notify             Disable desktop notifications
+
+Display:
+  --columns               Start in multi-column layout
+  --sort-activity         Start with activity sort (busy first, then recently finished)
+  --sort-watchlist        Start with watchlist order (default)
+  --recency-color         Enable recency color gradient on indicators
+  --no-recency-color      Disable recency color gradient
+  --preview               Show pane preview panel (default)
+  --no-preview            Hide pane preview panel
+
+Mode:
+  --picker                Picker mode: Enter switches to pane and quits
+
 Run 'tj' without arguments to launch the TUI.
 `)
 }
 
-// parseFlags extracts --config/-c and --watchlist/-w flags from args.
-// Returns the remaining args (with flags removed), configPath, watchlistPath, and whether help was requested.
-func parseFlags(args []string) (remaining []string, configPath, watchlistPath string, helpRequested bool) {
+// CLIOverrides holds flag values that override config settings.
+// Nil pointers mean "not specified" (preserve config value).
+type CLIOverrides struct {
+	Sound        *bool
+	Notify       *bool
+	SortActivity *bool
+	Columns      *bool
+	RecencyColor *bool
+	PickerMode   *bool
+	Preview      *bool
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+// parseFlags extracts all flags from args.
+// Returns remaining args, configPath, watchlistPath, helpRequested, and CLI overrides.
+func parseFlags(args []string) (remaining []string, configPath, watchlistPath string, helpRequested bool, overrides CLIOverrides) {
 	i := 0
 	for i < len(args) {
 		arg := args[i]
 
-		// Check for --help or -h anywhere in args
-		if arg == "--help" || arg == "-h" {
+		switch {
+		// Help
+		case arg == "--help" || arg == "-h":
 			helpRequested = true
 			i++
 			continue
-		}
 
-		// Check for --config or -c
-		if arg == "--config" || arg == "-c" {
+		// Config path
+		case arg == "--config" || arg == "-c":
 			if i+1 < len(args) {
 				configPath = args[i+1]
 				i += 2
 				continue
 			}
-		}
-		// Check for --config=value
-		if strings.HasPrefix(arg, "--config=") {
+		case strings.HasPrefix(arg, "--config="):
 			configPath = strings.TrimPrefix(arg, "--config=")
 			i++
 			continue
-		}
-		if strings.HasPrefix(arg, "-c=") {
+		case strings.HasPrefix(arg, "-c="):
 			configPath = strings.TrimPrefix(arg, "-c=")
 			i++
 			continue
-		}
 
-		// Check for --watchlist or -w
-		if arg == "--watchlist" || arg == "-w" {
+		// Watchlist path
+		case arg == "--watchlist" || arg == "-w":
 			if i+1 < len(args) {
 				watchlistPath = args[i+1]
 				i += 2
 				continue
 			}
-		}
-		// Check for --watchlist=value
-		if strings.HasPrefix(arg, "--watchlist=") {
+		case strings.HasPrefix(arg, "--watchlist="):
 			watchlistPath = strings.TrimPrefix(arg, "--watchlist=")
 			i++
 			continue
-		}
-		if strings.HasPrefix(arg, "-w=") {
+		case strings.HasPrefix(arg, "-w="):
 			watchlistPath = strings.TrimPrefix(arg, "-w=")
+			i++
+			continue
+
+		// Alert flags
+		case arg == "--sound":
+			overrides.Sound = boolPtr(true)
+			i++
+			continue
+		case arg == "--no-sound":
+			overrides.Sound = boolPtr(false)
+			i++
+			continue
+		case arg == "--notify":
+			overrides.Notify = boolPtr(true)
+			i++
+			continue
+		case arg == "--no-notify":
+			overrides.Notify = boolPtr(false)
+			i++
+			continue
+
+		// Display flags
+		case arg == "--columns":
+			overrides.Columns = boolPtr(true)
+			i++
+			continue
+		case arg == "--sort-activity":
+			overrides.SortActivity = boolPtr(true)
+			i++
+			continue
+		case arg == "--sort-watchlist":
+			overrides.SortActivity = boolPtr(false)
+			i++
+			continue
+		case arg == "--recency-color":
+			overrides.RecencyColor = boolPtr(true)
+			i++
+			continue
+		case arg == "--no-recency-color":
+			overrides.RecencyColor = boolPtr(false)
+			i++
+			continue
+
+		// Mode flags
+		case arg == "--picker":
+			overrides.PickerMode = boolPtr(true)
+			i++
+			continue
+		case arg == "--preview":
+			overrides.Preview = boolPtr(true)
+			i++
+			continue
+		case arg == "--no-preview":
+			overrides.Preview = boolPtr(false)
 			i++
 			continue
 		}
@@ -103,9 +182,41 @@ func parseFlags(args []string) (remaining []string, configPath, watchlistPath st
 	return
 }
 
+// applyOverrides applies CLI flag overrides to the config.
+// Only non-nil overrides modify the config.
+func applyOverrides(cfg *config.Config, overrides CLIOverrides) {
+	if overrides.Sound != nil {
+		cfg.Alerts.SoundOnReady = *overrides.Sound
+		if !*overrides.Sound {
+			cfg.Alerts.MuteSound = true // --no-sound overrules per-pane settings
+		}
+	}
+	if overrides.Notify != nil {
+		cfg.Alerts.NotifyOnReady = *overrides.Notify
+		if !*overrides.Notify {
+			cfg.Alerts.MuteNotify = true // --no-notify overrules per-pane settings
+		}
+	}
+	if overrides.SortActivity != nil {
+		cfg.Display.SortByActivity = *overrides.SortActivity
+	}
+	if overrides.Columns != nil && *overrides.Columns {
+		cfg.Display.LayoutMode = "columns"
+	}
+	if overrides.RecencyColor != nil {
+		cfg.Display.RecencyColor = *overrides.RecencyColor
+	}
+	if overrides.PickerMode != nil {
+		cfg.Display.PickerMode = *overrides.PickerMode
+	}
+	if overrides.Preview != nil {
+		cfg.Display.ShowPreview = *overrides.Preview
+	}
+}
+
 func main() {
 	// Parse global flags before subcommand dispatch
-	args, configPath, watchlistPath, helpRequested := parseFlags(os.Args[1:])
+	args, configPath, watchlistPath, helpRequested, overrides := parseFlags(os.Args[1:])
 
 	// Handle help flag before anything else
 	if helpRequested {
@@ -115,6 +226,9 @@ func main() {
 
 	// Load config with optional custom path
 	cfg := config.Load(configPath)
+
+	// Apply CLI overrides
+	applyOverrides(cfg, overrides)
 
 	if len(args) > 0 {
 		switch args[0] {

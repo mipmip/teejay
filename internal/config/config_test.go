@@ -244,6 +244,69 @@ func TestLoadWithCustomPathMissing(t *testing.T) {
 	}
 }
 
+func TestDefaultDisplay(t *testing.T) {
+	cfg := Default()
+
+	if !cfg.Display.RecencyColor {
+		t.Error("expected default RecencyColor to be true")
+	}
+	if cfg.Display.SortByActivity {
+		t.Error("expected default SortByActivity to be false")
+	}
+}
+
+func TestLoadDisplaySection(t *testing.T) {
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, ".config", "teejay")
+	os.MkdirAll(configDir, 0755)
+
+	configContent := `
+display:
+  recency_color: false
+  sort_by_activity: true
+`
+	os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configContent), 0644)
+
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	cfg := Load()
+
+	if cfg.Display.RecencyColor {
+		t.Error("expected RecencyColor to be false from config")
+	}
+	if !cfg.Display.SortByActivity {
+		t.Error("expected SortByActivity to be true from config")
+	}
+}
+
+func TestLoadDisplayUnspecified(t *testing.T) {
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, ".config", "teejay")
+	os.MkdirAll(configDir, 0755)
+
+	// Config without display section — defaults should be preserved
+	configContent := `
+detection:
+  idle_timeout: 3s
+`
+	os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configContent), 0644)
+
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	cfg := Load()
+
+	if !cfg.Display.RecencyColor {
+		t.Error("expected RecencyColor default true when display section absent")
+	}
+	if cfg.Display.SortByActivity {
+		t.Error("expected SortByActivity default false when display section absent")
+	}
+}
+
 func TestLoadWithEmptyCustomPath(t *testing.T) {
 	// Empty string should fall back to default path behavior
 	tmpDir := t.TempDir()

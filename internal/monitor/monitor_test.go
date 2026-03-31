@@ -282,3 +282,30 @@ func TestLongContent(t *testing.T) {
 		t.Errorf("Long content: got %v, want Busy", status)
 	}
 }
+
+func TestLastChangeTime(t *testing.T) {
+	m := New(nil)
+
+	// Unknown pane returns zero time
+	if !m.LastChangeTime("%unknown").IsZero() {
+		t.Error("expected zero time for unknown pane")
+	}
+
+	// After Update, should return a recent time
+	m.Update("%0", "some content", "fish")
+	lastChange := m.LastChangeTime("%0")
+	if lastChange.IsZero() {
+		t.Error("expected non-zero time after Update")
+	}
+	if time.Since(lastChange) > time.Second {
+		t.Errorf("expected recent lastChangeTime, got %v ago", time.Since(lastChange))
+	}
+
+	// After content change, time should update
+	time.Sleep(10 * time.Millisecond)
+	m.Update("%0", "different content", "fish")
+	newLastChange := m.LastChangeTime("%0")
+	if !newLastChange.After(lastChange) {
+		t.Error("expected lastChangeTime to advance after content change")
+	}
+}

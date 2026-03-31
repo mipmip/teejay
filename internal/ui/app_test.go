@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -417,5 +418,29 @@ func TestPreviewTitleFallsBackToPaneID(t *testing.T) {
 	// Preview title should show the pane ID as fallback
 	if !strings.Contains(view, "Preview: %20") {
 		t.Errorf("Preview title should show pane ID '%%20' when no custom name, got view containing: %q", view)
+	}
+}
+
+func TestRecencyColor(t *testing.T) {
+	tests := []struct {
+		elapsed  time.Duration
+		expected string
+	}{
+		{0, "#00FF00"},
+		{5 * time.Second, "#00FF00"},
+		{10 * time.Second, "#00DD00"},
+		{20 * time.Second, "#00DD00"},
+		{30 * time.Second, "#00BB00"},
+		{1 * time.Minute, "#00BB00"},
+		{2 * time.Minute, "#009900"},
+		{4 * time.Minute, "#009900"},
+		{5 * time.Minute, "#006600"},
+		{30 * time.Minute, "#006600"},
+	}
+	for _, tt := range tests {
+		got := string(recencyColor(tt.elapsed))
+		if got != tt.expected {
+			t.Errorf("recencyColor(%v) = %q, want %q", tt.elapsed, got, tt.expected)
+		}
 	}
 }

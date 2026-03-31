@@ -30,12 +30,24 @@ type Alerts struct {
 	SoundOnReady  bool   `yaml:"sound_on_ready"`
 	NotifyOnReady bool   `yaml:"notify_on_ready"`
 	SoundType     string `yaml:"sound_type"`
+	MuteSound     bool   `yaml:"-"` // CLI-only: --no-sound overrules all per-pane settings
+	MuteNotify    bool   `yaml:"-"` // CLI-only: --no-notify overrules all per-pane settings
+}
+
+// Display holds display/UI configuration.
+type Display struct {
+	RecencyColor   bool   `yaml:"recency_color"`
+	SortByActivity bool   `yaml:"sort_by_activity"`
+	LayoutMode     string `yaml:"layout_mode"`
+	PickerMode     bool   `yaml:"picker_mode"`
+	ShowPreview    bool   `yaml:"show_preview"`
 }
 
 // Config holds all application configuration.
 type Config struct {
 	Detection Detection `yaml:"detection"`
 	Alerts    Alerts    `yaml:"alerts"`
+	Display   Display   `yaml:"display"`
 }
 
 // configFile is the YAML structure for parsing (with string duration).
@@ -47,7 +59,14 @@ type configFile struct {
 		BusyStrings    []string               `yaml:"busy_strings"`
 		Apps           map[string]AppPatterns `yaml:"apps"`
 	} `yaml:"detection"`
-	Alerts Alerts `yaml:"alerts"`
+	Alerts  Alerts `yaml:"alerts"`
+	Display struct {
+		RecencyColor   *bool  `yaml:"recency_color"`
+		SortByActivity *bool  `yaml:"sort_by_activity"`
+		LayoutMode     string `yaml:"layout_mode"`
+		PickerMode     *bool  `yaml:"picker_mode"`
+		ShowPreview    *bool  `yaml:"show_preview"`
+	} `yaml:"display"`
 }
 
 // Default returns the default configuration with sensible defaults.
@@ -79,6 +98,13 @@ func Default() *Config {
 			SoundOnReady:  false,
 			NotifyOnReady: false,
 			SoundType:     "chime",
+		},
+		Display: Display{
+			RecencyColor:   true,
+			SortByActivity: false,
+			LayoutMode:     "default",
+			PickerMode:     false,
+			ShowPreview:    true,
 		},
 	}
 }
@@ -156,6 +182,23 @@ func Load(customPath ...string) *Config {
 	cfg.Alerts.NotifyOnReady = cf.Alerts.NotifyOnReady
 	if cf.Alerts.SoundType != "" {
 		cfg.Alerts.SoundType = cf.Alerts.SoundType
+	}
+
+	// Copy display settings, only overriding if explicitly set
+	if cf.Display.RecencyColor != nil {
+		cfg.Display.RecencyColor = *cf.Display.RecencyColor
+	}
+	if cf.Display.SortByActivity != nil {
+		cfg.Display.SortByActivity = *cf.Display.SortByActivity
+	}
+	if cf.Display.LayoutMode != "" {
+		cfg.Display.LayoutMode = cf.Display.LayoutMode
+	}
+	if cf.Display.PickerMode != nil {
+		cfg.Display.PickerMode = *cf.Display.PickerMode
+	}
+	if cf.Display.ShowPreview != nil {
+		cfg.Display.ShowPreview = *cf.Display.ShowPreview
 	}
 
 	return cfg

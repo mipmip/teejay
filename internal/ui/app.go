@@ -5,6 +5,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -97,6 +98,22 @@ var (
 				Foreground(lipgloss.Color("#555555")) // Dim gray
 )
 
+// recencyColor returns a green color that fades with elapsed time.
+func recencyColor(elapsed time.Duration) lipgloss.Color {
+	switch {
+	case elapsed < 10*time.Second:
+		return lipgloss.Color("#00FF00") // Bright neon green
+	case elapsed < 30*time.Second:
+		return lipgloss.Color("#00DD00") // Bright green
+	case elapsed < 2*time.Minute:
+		return lipgloss.Color("#00BB00") // Medium green
+	case elapsed < 5*time.Minute:
+		return lipgloss.Color("#009900") // Dim green
+	default:
+		return lipgloss.Color("#006600") // Very dim green
+	}
+}
+
 // browserItemDelegate implements list.ItemDelegate for styled browser items
 type browserItemDelegate struct{}
 
@@ -147,6 +164,8 @@ func (d browserItemDelegate) Render(w io.Writer, m list.Model, index int, item l
 			if p.promptInfo.Type.IsActionable() {
 				indicatorText = "?"
 				indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#FFD700")) // Yellow
+			} else if p.recencyColorOn && !p.lastActivity.IsZero() {
+				indicatorStyle = indicatorStyle.Foreground(recencyColor(time.Since(p.lastActivity)))
 			} else {
 				indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#00FF00"))
 			}
@@ -247,7 +266,9 @@ type paneItem struct {
 	windowName     string // tmux window name
 	soundOverride  *bool  // per-pane sound override (nil = inheriting global)
 	notifyOverride *bool  // per-pane notification override (nil = inheriting global)
-	promptInfo     prompt.PromptInfo // parsed prompt state when waiting
+	promptInfo       prompt.PromptInfo // parsed prompt state when waiting
+	lastActivity     time.Time         // last content change time from monitor
+	recencyColorOn   bool              // whether to use recency-based color gradient
 }
 
 func (p paneItem) Title() string {
@@ -381,6 +402,8 @@ type Model struct {
 	layoutMode       int                      // 0 = default (list+preview), 1 = multi-column
 	panePrompts      map[string]prompt.PromptInfo // cached prompt info per pane
 	promptCheckTick  int                      // counter for periodic prompt checking
+	sortByActivity   bool                     // sort panes by last activity (most recent first)
+	pickerMode       bool                     // Enter switches pane and quits
 	quickAnswering     bool              // true when quick-answer popup is open
 	quickAnswerPane    string            // pane ID being answered
 	quickAnswerPrompt  prompt.PromptInfo // prompt being answered
@@ -461,9 +484,16 @@ func New(version string, cfg *config.Config, watchlistPath string) Model {
 		lastActivePanes:  make(map[string]bool),
 		paneFocusLostAt: make(map[string]time.Time),
 		panePrompts:     make(map[string]prompt.PromptInfo),
+		sortByActivity:  cfg.Display.SortByActivity,
+		pickerMode:      cfg.Display.PickerMode,
 		empty:           len(items) == 0,
 		watchlistMtime:  wlMtime,
 		version:         version,
+	}
+
+	// Initialize layout mode from config
+	if cfg.Display.LayoutMode == "columns" {
+		m.layoutMode = layoutMultiColumn
 	}
 
 	// Capture initial pane content if there are panes
@@ -804,11 +834,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if !m.empty && m.selectedPaneID != "" {
 				if tmux.IsInsideTmux() {
-					// Switch to the pane but keep app running
 					tmux.SwitchToPane(m.selectedPaneID)
+					if m.pickerMode {
+						return m, tea.Quit
+					}
 					return m, nil
 				}
-				// Show "not in tmux" message with auto-dismiss
 				return m, m.showTemporaryMessage("Cannot switch: not running inside tmux")
 			}
 		case "esc":
@@ -816,6 +847,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.temporaryMessage != "" {
 				m.temporaryMessage = ""
 			}
+			return m, nil
+		case "o":
+			// Toggle sort order
+			m.sortByActivity = !m.sortByActivity
+			m.refreshListWithFrame(m.tickFrame)
 			return m, nil
 		case "a":
 			// Open pane browser
@@ -1361,12 +1397,12 @@ func (m *Model) triggerAlerts(paneID string) {
 		return
 	}
 
-	if pane.GetEffectiveSound(m.config) {
+	if !m.config.Alerts.MuteSound && pane.GetEffectiveSound(m.config) {
 		soundType := pane.GetEffectiveSoundType(m.config)
 		alerts.PlaySound(soundType)
 	}
 
-	if pane.GetEffectiveNotify(m.config) {
+	if !m.config.Alerts.MuteNotify && pane.GetEffectiveNotify(m.config) {
 		displayName := pane.DisplayName()
 		alerts.SendNotification("Teejay", displayName+" is ready")
 	}
@@ -1396,8 +1432,23 @@ func (m *Model) refreshListWithFrame(frame int) {
 			session = info.Session
 			windowName = info.WindowName
 		}
-		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: status, frame: frame, command: command, session: session, windowName: windowName, soundOverride: p.SoundOnReady, notifyOverride: p.NotifyOnReady, promptInfo: m.panePrompts[p.ID]}
+		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: status, frame: frame, command: command, session: session, windowName: windowName, soundOverride: p.SoundOnReady, notifyOverride: p.NotifyOnReady, promptInfo: m.panePrompts[p.ID], lastActivity: m.monitor.LastChangeTime(p.ID), recencyColorOn: m.config.Display.RecencyColor}
 	}
+
+	// Sort by activity if enabled: busy first (most recent), then waiting (most recent)
+	if m.sortByActivity {
+		sort.SliceStable(items, func(i, j int) bool {
+			a := items[i].(paneItem)
+			b := items[j].(paneItem)
+			// Busy panes before waiting panes
+			if a.status != b.status {
+				return a.status == monitor.Busy
+			}
+			// Within same status, most recently active first
+			return a.lastActivity.After(b.lastActivity)
+		})
+	}
+
 	m.list.SetItems(items)
 	m.empty = len(items) == 0
 }
@@ -1548,7 +1599,7 @@ func (m Model) View() string {
 	} else {
 		// Default mode: list + preview
 		listWidth := m.width*30/100 - 2
-		showPreview := listWidth >= 25
+		showPreview := m.config.Display.ShowPreview && listWidth >= 25
 
 		if showPreview {
 			previewWidth := m.width*70/100 - 2
@@ -1607,9 +1658,9 @@ func (m Model) View() string {
 	} else if m.temporaryMessage != "" {
 		footer = errorStyle.Render(m.temporaryMessage) + "\n" + helpStyle.Render("Press Esc to dismiss")
 	} else if m.statusMessage != "" {
-		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • space: answer • v: view • a: add • s: scan • c: configure • d: delete • q: quit")
+		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • space: answer • v: view • o: order • a: add • s: scan • c: configure • d: delete • q: quit")
 	} else {
-		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • space: answer • v: view • a: add • s: scan • c: configure • d: delete • q: quit")
+		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • space: answer • v: view • o: order • a: add • s: scan • c: configure • d: delete • q: quit")
 	}
 
 	// Add branding to footer line if terminal is wide enough
@@ -1707,7 +1758,7 @@ func (m Model) renderMultiColumnLayout() string {
 	footerHeight := 2                // help line + branding line
 	remainingHeight := m.height - gridHeight - footerHeight
 
-	if remainingHeight >= minPreviewBelowHeight {
+	if m.config.Display.ShowPreview && remainingHeight >= minPreviewBelowHeight {
 		// Render preview panel below the grid
 		previewWidth := m.width - 4
 
@@ -1767,6 +1818,8 @@ func (m Model) renderMultiColumnItem(item list.Item, contentWidth int, isSelecte
 		if i.promptInfo.Type.IsActionable() {
 			indicatorText = "?"
 			indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#FFD700"))
+		} else if i.recencyColorOn && !i.lastActivity.IsZero() {
+			indicatorStyle = indicatorStyle.Foreground(recencyColor(time.Since(i.lastActivity)))
 		} else {
 			indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#00FF00"))
 		}

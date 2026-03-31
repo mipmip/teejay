@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- recency color gradient on waiting indicator (bright→dim green over time)
+- activity sort: press `o` to sort panes by last activity (busy first, then most recently finished)
+- config: `display.recency_color` and `display.sort_by_activity` options
+- multi-column layout: preview panel shown below columns when vertical space allows
+- alternate screen buffer: terminal restores cleanly on quit
+- CLI flags: `--sound`, `--notify`, `--columns`, `--sort-activity`, `--recency-color`, `--picker` (and `--no-*` variants)
+- picker mode (`--picker`): Enter switches to pane and quits — use as a pane selector
+- config: `display.layout_mode` and `display.picker_mode` options
+- `--no-sound`/`--no-notify` now overrule per-pane settings (master mute)
+- `--preview`/`--no-preview`: show or hide pane preview panel
+- documentation: updated README with all flags, keybindings, and config options
+
 ## [0.2.9] - 2026-03-30
 
 - fix: escape no longer quits the app (only `q` and `ctrl+c` quit)

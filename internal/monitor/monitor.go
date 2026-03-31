@@ -108,6 +108,15 @@ func (m *Monitor) ResetBaseline(paneID, content string) {
 	}
 }
 
+// LastChangeTime returns the last content change timestamp for a pane.
+// Returns the zero time if the pane is not being monitored.
+func (m *Monitor) LastChangeTime(paneID string) time.Time {
+	if state, ok := m.panes[paneID]; ok {
+		return state.lastChangeTime
+	}
+	return time.Time{}
+}
+
 // hasBusyString checks if content contains any of the busy strings.
 // Busy strings take precedence over waiting strings.
 func (m *Monitor) hasBusyString(content string, patterns []string) bool {

@@ -62,3 +62,34 @@ alerts:
   # Send desktop notification when a pane becomes ready
   # Default: false
   notify_on_ready: false
+
+# Display settings
+# Control the visual appearance and default behavior of the TUI.
+# These can be overridden at runtime with keybindings or CLI flags.
+display:
+  # Color gradient on waiting indicators based on recency
+  # Bright green = just finished, dim green = been waiting a while
+  # Default: true
+  recency_color: true
+
+  # Default sort order
+  # false = watchlist order, true = activity sort (busy first, then recently finished)
+  # Toggle at runtime with 'o' key
+  # Default: false
+  sort_by_activity: false
+
+  # Initial layout mode
+  # "default" = list + preview side-by-side
+  # "columns" = multi-column grid (toggle at runtime with 'v' key)
+  # Default: "default"
+  layout_mode: "default"
+
+  # Picker mode: Enter switches to pane and quits the application
+  # Useful as a pane selector: tj --picker --columns --sort-activity
+  # Default: false
+  picker_mode: false
+
+  # Show pane preview panel
+  # Set to false to hide preview in both default and multi-column layouts
+  # Default: true
+  show_preview: true

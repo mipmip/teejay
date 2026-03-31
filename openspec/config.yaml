@@ -19,12 +19,9 @@ context: |
 #     We use conventional commits
 #     Domain: e-commerce platform
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  tasks:
+    - "When adding CLI flags, include a task to update: printHelp() in main.go, README.md CLI Flags section, and config.example.yaml if a config option is involved."
+    - "When adding keybindings, include a task to update: README.md Keybindings section and the help footer in app.go."
+    - "When adding config options, include a task to update: README.md Configuration Options table and config.example.yaml."
+    - "Always include a task to update CHANGELOG.md under [Unreleased]."

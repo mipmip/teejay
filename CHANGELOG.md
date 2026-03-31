@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-31
+
 - recency color gradient on waiting indicator (bright→dim green over time)
 - activity sort: press `o` to sort panes by last activity (busy first, then most recently finished)
 - config: `display.recency_color` and `display.sort_by_activity` options

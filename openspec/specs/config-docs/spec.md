@@ -3,18 +3,25 @@
 ## Purpose
 TBD - created by archiving change config-documentation. Update Purpose after archive.
 ## Requirements
-### Requirement: README Configuration section
+### Requirement: README documents all features
 
-The README.md SHALL include a Configuration section documenting all config options.
+The README SHALL document all CLI flags, keybindings, and configuration options.
 
-#### Scenario: Configuration section exists
-- **WHEN** a user reads README.md
-- **THEN** they find a Configuration section with a table of all options
-- **AND** each option shows its type, default value, and description
+#### Scenario: CLI flags documented
+- **WHEN** a user reads the README
+- **THEN** all CLI flags SHALL be listed with descriptions
 
-#### Scenario: App-specific patterns documented
-- **WHEN** a user reads the Configuration section
-- **THEN** they find documentation explaining how app-specific patterns replace global patterns
+#### Scenario: Keybindings documented
+- **WHEN** a user reads the README
+- **THEN** all TUI keybindings SHALL be listed in a reference table
+
+#### Scenario: Config options documented
+- **WHEN** a user reads the README
+- **THEN** all config file options SHALL be listed including the display section
+
+#### Scenario: Example config is complete
+- **WHEN** a user copies config.example.yaml
+- **THEN** it SHALL include all available config sections with comments
 
 ### Requirement: Example configuration file
 
@@ -38,4 +45,12 @@ The example configuration file SHALL be immediately usable when copied.
 - **WHEN** user copies config.example.yaml to ~/.config/teejay/config.yaml
 - **THEN** the application loads it without errors
 - **AND** the configuration works as documented
+
+### Requirement: Documentation sync guardrail
+
+The OpenSpec project context SHALL include a rule reminding contributors to update documentation when adding CLI flags, config options, or keybindings.
+
+#### Scenario: New flag added
+- **WHEN** a change adds a new CLI flag
+- **THEN** the contributor SHALL be reminded to update README.md, config.example.yaml, and printHelp()
 

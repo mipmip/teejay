@@ -93,3 +93,8 @@ display:
   # Set to false to hide preview in both default and multi-column layouts
   # Default: true
   show_preview: true
+
+  # Scan for agent panes at startup and auto-add them to the watchlist
+  # Same as pressing 's' or using --scan flag
+  # Default: false
+  scan_on_start: false

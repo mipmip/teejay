@@ -32,6 +32,7 @@ Commands:
   add         Add the current tmux pane to the watchlist
   del         Remove the current tmux pane from the watchlist
   scan        Scan all panes and add those running known agents
+  init        Create initial config file with interactive setup
 
 General:
   -h, --help              Show this help message
@@ -56,6 +57,7 @@ Display:
 
 Mode:
   --picker                Picker mode: Enter switches to pane and quits
+  --scan                  Scan for agent panes at startup
 
 Run 'tj' without arguments to launch the TUI.
 `)
@@ -71,6 +73,7 @@ type CLIOverrides struct {
 	RecencyColor *bool
 	PickerMode   *bool
 	Preview      *bool
+	Scan         *bool
 }
 
 func boolPtr(v bool) *bool { return &v }
@@ -174,6 +177,10 @@ func parseFlags(args []string) (remaining []string, configPath, watchlistPath st
 			overrides.Preview = boolPtr(false)
 			i++
 			continue
+		case arg == "--scan":
+			overrides.Scan = boolPtr(true)
+			i++
+			continue
 		}
 
 		remaining = append(remaining, arg)
@@ -212,6 +219,9 @@ func applyOverrides(cfg *config.Config, overrides CLIOverrides) {
 	if overrides.Preview != nil {
 		cfg.Display.ShowPreview = *overrides.Preview
 	}
+	if overrides.Scan != nil {
+		cfg.Display.ScanOnStart = *overrides.Scan
+	}
 }
 
 func main() {
@@ -249,6 +259,12 @@ func main() {
 			return
 		case "scan":
 			if err := cmd.ScanPanes(cfg, watchlistPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "init":
+			if err := cmd.InitConfig(); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}

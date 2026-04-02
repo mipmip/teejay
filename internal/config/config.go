@@ -41,6 +41,7 @@ type Display struct {
 	LayoutMode     string `yaml:"layout_mode"`
 	PickerMode     bool   `yaml:"picker_mode"`
 	ShowPreview    bool   `yaml:"show_preview"`
+	ScanOnStart    bool   `yaml:"scan_on_start"`
 }
 
 // Config holds all application configuration.
@@ -66,6 +67,7 @@ type configFile struct {
 		LayoutMode     string `yaml:"layout_mode"`
 		PickerMode     *bool  `yaml:"picker_mode"`
 		ShowPreview    *bool  `yaml:"show_preview"`
+		ScanOnStart    *bool  `yaml:"scan_on_start"`
 	} `yaml:"display"`
 }
 
@@ -105,6 +107,7 @@ func Default() *Config {
 			LayoutMode:     "default",
 			PickerMode:     false,
 			ShowPreview:    true,
+			ScanOnStart:    false,
 		},
 	}
 }
@@ -199,6 +202,9 @@ func Load(customPath ...string) *Config {
 	}
 	if cf.Display.ShowPreview != nil {
 		cfg.Display.ShowPreview = *cf.Display.ShowPreview
+	}
+	if cf.Display.ScanOnStart != nil {
+		cfg.Display.ScanOnStart = *cf.Display.ScanOnStart
 	}
 
 	return cfg

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `tj init`: interactive setup wizard to create initial config file
+- `--scan`: scan for agent panes at startup and auto-add them
+- `--preview`/`--no-preview`: show or hide pane preview panel
+- `--no-sound`/`--no-notify` now overrule per-pane settings (master mute)
+- documentation: updated README with all flags, keybindings, and config options
+- keybind `D`: delete all panes from watchlist with confirmation
+- keybind `p`: toggle preview panel on/off at runtime
+- keybind `/`: quick filter — type to search panes by name, session, window, or command (#36)
+- fix: `k` and `j` keys now work in quick-answer free text input (#35)
+- fix: preview now always shows the last lines of pane content (#34)
+- wider columns in multi-column mode (min 45 chars, capped to item count)
+
 ## [0.3.0] - 2026-03-31
 
 - recency color gradient on waiting indicator (bright→dim green over time)

@@ -231,6 +231,12 @@ type promptCheckResultMsg struct {
 	results map[string]prompt.PromptInfo
 }
 
+// scanResultMsg carries the result of an async startup scan.
+type scanResultMsg struct {
+	result scan.ScanResult
+	err    error
+}
+
 // dismissTemporaryMsg is sent to auto-dismiss temporary messages after timeout
 type dismissTemporaryMsg struct{}
 
@@ -369,7 +375,9 @@ type Model struct {
 	monitor        *monitor.Monitor
 	config         *config.Config
 	paneStatuses   map[string]monitor.PaneStatus
-	paneCommands   map[string]string // current foreground command per pane
+	paneCommands   map[string]string     // current foreground command per pane
+	paneSessions   map[string]string     // cached tmux session name per pane
+	paneWindows    map[string]string     // cached tmux window name per pane
 	empty          bool
 	loadErr        error
 	selectedPaneID string
@@ -404,6 +412,10 @@ type Model struct {
 	promptCheckTick  int                      // counter for periodic prompt checking
 	sortByActivity   bool                     // sort panes by last activity (most recent first)
 	pickerMode       bool                     // Enter switches pane and quits
+	deletingAll      bool                     // true when "delete all" confirmation is shown
+	filtering        bool                     // true when filter input is active
+	filterQuery      string                   // current filter query (persists after confirm)
+	filterInput      textinput.Model          // text input for filter
 	quickAnswering     bool              // true when quick-answer popup is open
 	quickAnswerPane    string            // pane ID being answered
 	quickAnswerPrompt  prompt.PromptInfo // prompt being answered
@@ -472,15 +484,22 @@ func New(version string, cfg *config.Config, watchlistPath string) Model {
 	ti.Placeholder = "Enter name..."
 	ti.CharLimit = 50
 
+	fi := textinput.New()
+	fi.Placeholder = "Filter..."
+	fi.CharLimit = 100
+
 	m := Model{
 		list:           l,
 		viewport:       vp,
 		textInput:      ti,
+		filterInput:    fi,
 		watchlist:      wl,
 		monitor:        monitor.New(cfg),
 		config:         cfg,
 		paneStatuses:   make(map[string]monitor.PaneStatus),
 		paneCommands:    make(map[string]string),
+		paneSessions:   make(map[string]string),
+		paneWindows:    make(map[string]string),
 		lastActivePanes:  make(map[string]bool),
 		paneFocusLostAt: make(map[string]time.Time),
 		panePrompts:     make(map[string]prompt.PromptInfo),
@@ -536,6 +555,7 @@ func (m *Model) captureSelectedPane() {
 		m.previewContent = content
 	}
 	m.viewport.SetContent(m.previewContent)
+	m.viewport.GotoBottom()
 }
 
 // captureBrowserPreview captures pane content for the currently selected browser item.
@@ -584,10 +604,25 @@ func (m *Model) removeStalePane(paneID string) {
 }
 
 func (m Model) Init() tea.Cmd {
+	var cmds []tea.Cmd
 	if !m.empty {
-		return tickCmd()
+		cmds = append(cmds, tickCmd())
 	}
-	return nil
+	if m.config.Display.ScanOnStart {
+		cfg := m.config
+		wl := m.watchlist
+		cmds = append(cmds, func() tea.Msg {
+			allPanes, err := tmux.ListAllPanes()
+			if err != nil {
+				return scanResultMsg{err: err}
+			}
+			return scanResultMsg{result: scan.ScanAndAdd(wl, cfg, allPanes)}
+		})
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -618,7 +653,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Skip refresh when in modal modes
 		var promptCmd tea.Cmd
-		if !m.editing && !m.deleting && !m.browsing && !m.configuring {
+		if !m.editing && !m.deleting && !m.deletingAll && !m.browsing && !m.configuring {
 			// Check if watchlist file has been modified externally
 			m.checkWatchlistFileChange()
 
@@ -693,6 +728,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.previewContent = content
 						m.previewErr = nil
 						m.viewport.SetContent(m.previewContent)
+						m.viewport.GotoBottom()
 					}
 				}
 
@@ -734,6 +770,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd()
 	}
 
+	// Handle scanResultMsg — apply async startup scan results
+	if msg, ok := msg.(scanResultMsg); ok {
+		if msg.err != nil {
+			m.statusMessage = fmt.Sprintf("Scan failed: %v", msg.err)
+		} else if msg.result.Found == 0 {
+			m.statusMessage = "Scan: no agent panes found"
+		} else {
+			if msg.result.Skipped > 0 {
+				m.statusMessage = fmt.Sprintf("Scan: added %d panes (%d already watched)", msg.result.Added, msg.result.Skipped)
+			} else {
+				m.statusMessage = fmt.Sprintf("Scan: added %d panes", msg.result.Added)
+			}
+			if msg.result.Added > 0 {
+				m.watchlist.Save()
+				m.refreshList()
+				m.empty = len(m.watchlist.Panes) == 0
+				if m.empty {
+					return m, nil
+				}
+				return m, tickCmd()
+			}
+		}
+		return m, nil
+	}
+
 	// Handle promptCheckResultMsg — apply async prompt recognition results
 	if msg, ok := msg.(promptCheckResultMsg); ok {
 		for id, info := range msg.results {
@@ -746,6 +807,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle edit mode
 	if m.editing {
 		return m.updateEditing(msg)
+	}
+
+	// Handle filter mode
+	if m.filtering {
+		return m.updateFiltering(msg)
+	}
+
+	// Handle delete-all confirmation mode
+	if m.deletingAll {
+		return m.updateDeletingAll(msg)
 	}
 
 	// Handle delete confirmation mode
@@ -824,6 +895,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleting = true
 				return m, nil
 			}
+		case "D":
+			if !m.empty {
+				m.deletingAll = true
+				return m, nil
+			}
 		case "c":
 			if !m.empty && m.selectedPaneID != "" {
 				m.configuring = true
@@ -843,10 +919,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.showTemporaryMessage("Cannot switch: not running inside tmux")
 			}
 		case "esc":
-			// Clear any temporary messages
+			// Clear active filter, or temporary messages
+			if m.filterQuery != "" {
+				m.filterQuery = ""
+				m.refreshListWithFrame(m.tickFrame)
+				return m, nil
+			}
 			if m.temporaryMessage != "" {
 				m.temporaryMessage = ""
 			}
+			return m, nil
+		case "/":
+			// Enter filter mode
+			m.filtering = true
+			m.filterInput.SetValue(m.filterQuery)
+			m.filterInput.Focus()
+			return m, textinput.Blink
+		case "p":
+			// Toggle preview panel
+			m.config.Display.ShowPreview = !m.config.Display.ShowPreview
 			return m, nil
 		case "o":
 			// Toggle sort order
@@ -908,7 +999,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		m.panelHeight = m.height - 2 // leave room for footer
+		m.panelHeight = m.height - 4 // leave room for footer (help text may wrap on narrow terminals)
 
 		if m.layoutMode == layoutMultiColumn {
 			// Multi-column: list gets full width (rendering is manual)
@@ -1093,22 +1184,101 @@ func (m Model) updateQuickAnswer(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = fmt.Sprintf("Sent %q to %s", response, m.quickAnswerPane)
 			return m, nil
 		case "up", "k":
-			if hasOptions && m.quickAnswerSelected > 0 {
-				m.quickAnswerSelected--
+			if hasOptions {
+				if m.quickAnswerSelected > 0 {
+					m.quickAnswerSelected--
+				}
+				return m, nil
 			}
-			return m, nil
 		case "down", "j":
-			if hasOptions && m.quickAnswerSelected < len(m.quickAnswerPrompt.Options)-1 {
-				m.quickAnswerSelected++
+			if hasOptions {
+				if m.quickAnswerSelected < len(m.quickAnswerPrompt.Options)-1 {
+					m.quickAnswerSelected++
+				}
+				return m, nil
 			}
+		}
+
+		// Forward to text input when no options (free text mode)
+		if !hasOptions {
+			var cmd tea.Cmd
+			m.quickAnswerInput, cmd = m.quickAnswerInput.Update(msg)
+			return m, cmd
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateFiltering(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter":
+			// Confirm filter, keep query active
+			m.filtering = false
+			m.filterQuery = m.filterInput.Value()
+			m.filterInput.Blur()
+			m.applyFilterToList()
 			return m, nil
-		default:
-			if !hasOptions {
-				// Forward to text input
-				var cmd tea.Cmd
-				m.quickAnswerInput, cmd = m.quickAnswerInput.Update(msg)
-				return m, cmd
-			}
+		case "esc":
+			// Cancel and clear filter
+			m.filtering = false
+			m.filterQuery = ""
+			m.filterInput.Blur()
+			m.applyFilterToList()
+			return m, nil
+		}
+	}
+
+	// Forward all other keys to the text input
+	var cmd tea.Cmd
+	m.filterInput, cmd = m.filterInput.Update(msg)
+	// Update filter query live as user types
+	m.filterQuery = m.filterInput.Value()
+	m.applyFilterToList()
+	return m, cmd
+}
+
+// applyFilterToList re-filters the cached item list without re-fetching tmux data.
+// Uses cached session/window/command data — no subprocess calls, instant response.
+func (m *Model) applyFilterToList() {
+	items := make([]list.Item, 0, len(m.watchlist.Panes))
+	query := strings.ToLower(m.filterQuery)
+
+	for _, p := range m.watchlist.Panes {
+		item := paneItem{
+			id: p.ID, name: p.Name, addedAt: p.AddedAt,
+			status: m.paneStatuses[p.ID], frame: m.tickFrame,
+			command: m.paneCommands[p.ID],
+			session: m.paneSessions[p.ID], windowName: m.paneWindows[p.ID],
+			soundOverride: p.SoundOnReady, notifyOverride: p.NotifyOnReady,
+			promptInfo: m.panePrompts[p.ID],
+			lastActivity: m.monitor.LastChangeTime(p.ID),
+			recencyColorOn: m.config.Display.RecencyColor,
+		}
+		if query == "" || strings.Contains(strings.ToLower(item.Title()+" "+item.session+" "+item.windowName+" "+item.command), query) {
+			items = append(items, item)
+		}
+	}
+
+	m.list.SetItems(items)
+}
+
+func (m Model) updateDeletingAll(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "y", "Y":
+			m.watchlist.Panes = nil
+			m.watchlist.Save()
+			m.refreshList()
+			m.deletingAll = false
+			m.empty = true
+			m.selectedPaneID = ""
+			return m, nil
+		case "n", "N", "esc":
+			m.deletingAll = false
+			return m, nil
 		}
 	}
 	return m, nil
@@ -1418,6 +1588,8 @@ func (m *Model) refreshListWithFrame(frame int) {
 	for _, p := range m.watchlist.Panes {
 		if paneInfo, err := tmux.GetPaneByID(p.ID); err == nil && paneInfo != nil {
 			m.paneCommands[p.ID] = paneInfo.Command
+			m.paneSessions[p.ID] = paneInfo.Session
+			m.paneWindows[p.ID] = paneInfo.WindowName
 			paneInfoMap[p.ID] = paneInfo
 		}
 		// On error, keep last known command (graceful degradation)
@@ -1427,11 +1599,8 @@ func (m *Model) refreshListWithFrame(frame int) {
 	for i, p := range m.watchlist.Panes {
 		status := m.paneStatuses[p.ID]
 		command := m.paneCommands[p.ID]
-		var session, windowName string
-		if info, ok := paneInfoMap[p.ID]; ok {
-			session = info.Session
-			windowName = info.WindowName
-		}
+		session := m.paneSessions[p.ID]
+		windowName := m.paneWindows[p.ID]
 		items[i] = paneItem{id: p.ID, name: p.Name, addedAt: p.AddedAt, status: status, frame: frame, command: command, session: session, windowName: windowName, soundOverride: p.SoundOnReady, notifyOverride: p.NotifyOnReady, promptInfo: m.panePrompts[p.ID], lastActivity: m.monitor.LastChangeTime(p.ID), recencyColorOn: m.config.Display.RecencyColor}
 	}
 
@@ -1449,8 +1618,23 @@ func (m *Model) refreshListWithFrame(frame int) {
 		})
 	}
 
+	// Apply filter if active
+	if m.filterQuery != "" {
+		query := strings.ToLower(m.filterQuery)
+		filtered := make([]list.Item, 0, len(items))
+		for _, item := range items {
+			p := item.(paneItem)
+			searchText := strings.ToLower(p.Title() + " " + p.session + " " + p.windowName + " " + p.command)
+			if strings.Contains(searchText, query) {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
+
 	m.list.SetItems(items)
-	m.empty = len(items) == 0
+	// empty reflects the actual watchlist, not the filtered view
+	m.empty = len(m.watchlist.Panes) == 0
 }
 
 // browserListWidth calculates the appropriate list width for the browser popup.
@@ -1570,7 +1754,7 @@ func (m Model) View() string {
 		return fmt.Sprintf("Error loading watchlist: %v\n\nPress q to quit.\n", m.loadErr)
 	}
 
-	if m.empty && !m.browsing {
+	if m.empty && !m.browsing && m.filterQuery == "" && !m.filtering {
 		return titleStyle.Render("Teejay") + "\n\n" +
 			emptyStyle.Render("No panes are being watched.") + "\n\n" +
 			helpStyle.Render("Press 'a' to browse and add panes, or run 'tj add' in a tmux pane.") + "\n\n" +
@@ -1592,14 +1776,22 @@ func (m Model) View() string {
 		return m.renderConfigurePopup()
 	}
 
+	// Estimate footer height: the help text is ~140 chars and wraps on narrow terminals
+	helpTextLen := 140 // approximate length of the longest help line
+	footerLineCount := 2 + (helpTextLen / max(m.width, 1)) // base 2 lines + wrapping
+	if footerLineCount < 2 {
+		footerLineCount = 2
+	}
+
 	var layout string
 	if m.layoutMode == layoutMultiColumn {
 		// Multi-column mode: no preview, fill width with columns
-		layout = m.renderMultiColumnLayout()
+		layout = m.renderMultiColumnLayout(footerLineCount)
 	} else {
 		// Default mode: list + preview
 		listWidth := m.width*30/100 - 2
-		showPreview := m.config.Display.ShowPreview && listWidth >= 25
+		hasItems := len(m.list.Items()) > 0
+		showPreview := m.config.Display.ShowPreview && listWidth >= 25 && hasItems
 
 		if showPreview {
 			previewWidth := m.width*70/100 - 2
@@ -1610,6 +1802,7 @@ func (m Model) View() string {
 			// Build list panel
 			listPanel := listPanelStyle.
 				Width(listWidth).
+				Height(m.panelHeight).
 				Render(m.list.View())
 
 			// Build preview panel
@@ -1629,6 +1822,7 @@ func (m Model) View() string {
 			previewTitle := previewTitleStyle.Render("Preview: " + previewName)
 			previewPanel := previewPanelStyle.
 				Width(previewWidth).
+				Height(m.panelHeight).
 				Render(previewTitle + "\n" + previewContent)
 
 			layout = lipgloss.JoinHorizontal(lipgloss.Top, listPanel, previewPanel)
@@ -1645,22 +1839,28 @@ func (m Model) View() string {
 		}
 	}
 
-	// Show mode-specific help/input
+	// Build footer first so we can measure its height for layout capping
 	var footer string
-	if m.editing {
+	if m.filtering {
+		footer = "/ " + m.filterInput.View() + "\n" + helpStyle.Render("Enter: confirm • Esc: clear")
+	} else if m.editing {
 		footer = "Rename: " + m.textInput.View() + "\n" + helpStyle.Render("Enter: save • Esc: cancel")
+	} else if m.deletingAll {
+		footer = errorStyle.Render(fmt.Sprintf("Delete all %d panes? (y/n)", len(m.watchlist.Panes)))
 	} else if m.deleting {
 		paneName := m.selectedPaneID
 		if item, ok := m.list.SelectedItem().(paneItem); ok {
 			paneName = item.Title()
 		}
 		footer = errorStyle.Render(fmt.Sprintf("Delete %s? (y/n)", paneName))
+	} else if m.filterQuery != "" {
+		footer = helpStyle.Render("Filter: "+m.filterQuery) + "\n" + helpStyle.Render("/ to edit • Esc to clear")
 	} else if m.temporaryMessage != "" {
 		footer = errorStyle.Render(m.temporaryMessage) + "\n" + helpStyle.Render("Press Esc to dismiss")
 	} else if m.statusMessage != "" {
-		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • space: answer • v: view • o: order • a: add • s: scan • c: configure • d: delete • q: quit")
+		footer = helpStyle.Render(m.statusMessage) + "\n" + helpStyle.Render("↑/↓: navigate • Enter: switch • /: filter • space: answer • v: view • p: preview • o: order • a: add • s: scan • c: configure • d/D: delete • q: quit")
 	} else {
-		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • space: answer • v: view • o: order • a: add • s: scan • c: configure • d: delete • q: quit")
+		footer = helpStyle.Render("↑/↓: navigate • Enter: switch • /: filter • space: answer • v: view • p: preview • o: order • a: add • s: scan • c: configure • d/D: delete • q: quit")
 	}
 
 	// Add branding to footer line if terminal is wide enough
@@ -1687,10 +1887,14 @@ type multiColumnInfo struct {
 
 // calcMultiColumn computes column layout from available width and item count.
 func calcMultiColumn(availableWidth, totalItems int) multiColumnInfo {
-	const minColWidth = 30
+	const minColWidth = 40
 	numColumns := availableWidth / minColWidth
 	if numColumns < 1 {
 		numColumns = 1
+	}
+	// Don't create more columns than items
+	if totalItems > 0 && numColumns > totalItems {
+		numColumns = totalItems
 	}
 	colWidth := availableWidth / numColumns
 	itemsPerCol := totalItems / numColumns
@@ -1722,9 +1926,13 @@ const minPreviewBelowHeight = 8 // minimum lines to show the below-preview
 
 // renderMultiColumnLayout renders all pane items in a multi-column grid,
 // with an optional preview panel below when vertical space allows.
-func (m Model) renderMultiColumnLayout() string {
+// footerLines is the estimated number of lines the footer will occupy.
+func (m Model) renderMultiColumnLayout(footerLines int) string {
 	items := m.list.Items()
 	if len(items) == 0 {
+		if m.filterQuery != "" {
+			return emptyStyle.Render("No panes match filter: " + m.filterQuery)
+		}
 		return emptyStyle.Render("No panes are being watched.")
 	}
 
@@ -1752,15 +1960,20 @@ func (m Model) renderMultiColumnLayout() string {
 	}
 
 	grid := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+	gridHeight := lipgloss.Height(grid)
 
-	// Calculate remaining vertical space for optional below-preview
-	gridHeight := mc.itemsPerCol * 4 // each item is 4 lines
-	footerHeight := 2                // help line + branding line
-	remainingHeight := m.height - gridHeight - footerHeight
+	// Reserve space for footer + the \n separator between layout and footer
+	remainingHeight := m.height - gridHeight - footerLines - 1
 
 	if m.config.Display.ShowPreview && remainingHeight >= minPreviewBelowHeight {
 		// Render preview panel below the grid
 		previewWidth := m.width - 4
+		previewPanelHeight := remainingHeight - 2 // subtract panel border
+		viewportHeight := previewPanelHeight - 2  // subtract title + margin
+
+		if viewportHeight < 1 {
+			viewportHeight = 1
+		}
 
 		var previewContent string
 		if m.previewErr != nil {
@@ -1769,7 +1982,7 @@ func (m Model) renderMultiColumnLayout() string {
 			previewContent = emptyStyle.Render("No content")
 		} else {
 			m.viewport.Width = previewWidth - 2 // subtract border
-			m.viewport.Height = remainingHeight - 4 // subtract border (2) + title (2)
+			m.viewport.Height = viewportHeight
 			previewContent = m.viewport.View()
 		}
 
@@ -1780,7 +1993,7 @@ func (m Model) renderMultiColumnLayout() string {
 		previewTitle := previewTitleStyle.Render("Preview: " + previewName)
 		previewPanel := previewPanelStyle.
 			Width(previewWidth).
-			Height(remainingHeight - 2). // subtract border
+			Height(previewPanelHeight).
 			Render(previewTitle + "\n" + previewContent)
 
 		return lipgloss.JoinVertical(lipgloss.Left, grid, previewPanel)

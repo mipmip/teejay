@@ -255,3 +255,55 @@ display:
 		t.Error("expected ShowPreview=false from config")
 	}
 }
+
+func TestParseFlagsScan(t *testing.T) {
+	_, _, _, _, overrides := parseFlags([]string{"--scan"})
+	if overrides.Scan == nil || !*overrides.Scan {
+		t.Error("expected --scan to set Scan=true")
+	}
+}
+
+func TestApplyOverridesScan(t *testing.T) {
+	cfg := config.Default()
+	if cfg.Display.ScanOnStart {
+		t.Fatal("expected default ScanOnStart=false")
+	}
+
+	applyOverrides(cfg, CLIOverrides{Scan: boolPtr(true)})
+	if !cfg.Display.ScanOnStart {
+		t.Error("expected ScanOnStart=true after --scan override")
+	}
+
+	// Nil should not change value
+	cfg.Display.ScanOnStart = true
+	applyOverrides(cfg, CLIOverrides{})
+	if !cfg.Display.ScanOnStart {
+		t.Error("expected ScanOnStart unchanged when override is nil")
+	}
+}
+
+func TestConfigScanOnStartYAML(t *testing.T) {
+	cfg := config.Default()
+	if cfg.Display.ScanOnStart {
+		t.Error("expected default ScanOnStart=false")
+	}
+
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, ".config", "teejay")
+	os.MkdirAll(configDir, 0755)
+
+	configContent := `
+display:
+  scan_on_start: true
+`
+	os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configContent), 0644)
+
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	cfg = config.Load()
+	if !cfg.Display.ScanOnStart {
+		t.Error("expected ScanOnStart=true from config")
+	}
+}

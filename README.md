@@ -77,6 +77,9 @@ tj add
 # Remove current pane from watchlist
 tj del
 
+# Create initial config file with interactive setup
+tj init
+
 # Use custom config and watchlist paths
 tj --config /path/to/config.yaml --watchlist /path/to/watchlist.json
 ```
@@ -118,6 +121,7 @@ tj --config /path/to/config.yaml --watchlist /path/to/watchlist.json
 | Flag | Description |
 |:-----|:------------|
 | `--picker` | Picker mode: Enter switches to pane and quits |
+| `--scan` | Scan for agent panes at startup |
 
 ## Keybindings
 
@@ -125,15 +129,18 @@ tj --config /path/to/config.yaml --watchlist /path/to/watchlist.json
 |:----|:-------|
 | `↑`/`k`, `↓`/`j` | Navigate up/down in pane list |
 | `←`/`h`, `→`/`l` | Navigate between columns (multi-column mode) |
+| `/` | Filter panes by name/session/window/command |
 | `Enter` | Switch to selected pane (quits in picker mode) |
 | `Space` | Open quick-answer popup for waiting panes |
 | `v` | Toggle layout: default (list+preview) ↔ multi-column |
+| `p` | Toggle preview panel on/off |
 | `o` | Toggle sort: watchlist order ↔ activity order |
 | `a` | Browse and add panes |
 | `s` | Scan for agent panes and auto-add |
 | `c` | Configure selected pane (name, alerts) |
 | `e` | Edit/rename selected pane |
 | `d` | Delete selected pane from watchlist |
+| `D` | Delete all panes from watchlist (with confirmation) |
 | `Esc` | Dismiss messages |
 | `q`, `Ctrl+C` | Quit |
 
@@ -162,6 +169,7 @@ cp config.example.yaml ~/.config/teejay/config.yaml
 | `display.layout_mode`                   | string     | `"default"` | Initial layout: `"default"` (list+preview) or `"columns"` (multi-column).                                        |
 | `display.picker_mode`                   | bool       | `false`     | Picker mode: Enter switches to pane and quits.                                                                    |
 | `display.show_preview`                  | bool       | `true`      | Show pane preview panel. Set to `false` to hide preview in both layouts.                                          |
+| `display.scan_on_start`                 | bool       | `false`     | Scan for agent panes at startup and auto-add them to the watchlist.                                               |
 
 **Note:** When a pane is running a configured application (matched by process
 name), only the app-specific patterns are used - global patterns are ignored.

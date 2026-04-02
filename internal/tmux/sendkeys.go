@@ -17,6 +17,26 @@ func SendKeys(paneID string, keys string) error {
 	return nil
 }
 
+// SendKeysThenEnter sends keystrokes and Enter as two separate tmux calls.
+// Some TUI apps (e.g., opencode) swallow Enter when it arrives in the same
+// send-keys invocation as the text, because the app is still processing the
+// literal characters. Splitting into two calls adds enough delay.
+func SendKeysThenEnter(paneID string, keys string) error {
+	if keys != "" {
+		cmd := exec.Command("tmux", "send-keys", "-t", paneID, keys)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("tmux send-keys failed: %s", strings.TrimSpace(string(output)))
+		}
+	}
+	cmd := exec.Command("tmux", "send-keys", "-t", paneID, "Enter")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux send-keys Enter failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 // SendRawKey sends a single key to a tmux pane without appending Enter.
 // Use for TUI prompts that read single keypresses (e.g., y/n permission prompts).
 func SendRawKey(paneID string, key string) error {

@@ -1172,7 +1172,12 @@ func (m Model) updateQuickAnswer(msg tea.Msg) (tea.Model, tea.Cmd) {
 				err = tmux.SendArrowAndEnter(m.quickAnswerPane, m.quickAnswerSelected)
 			default:
 				// Free text: send the full line + Enter
-				if response != "" {
+				appName := m.paneCommands[m.quickAnswerPane]
+				if appName == "opencode" {
+					// opencode's TUI swallows Enter when sent in the same
+					// tmux send-keys call as the text; split into two calls.
+					err = tmux.SendKeysThenEnter(m.quickAnswerPane, response)
+				} else if response != "" {
 					err = tmux.SendKeys(m.quickAnswerPane, response)
 				}
 			}

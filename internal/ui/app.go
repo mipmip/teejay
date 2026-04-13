@@ -98,6 +98,20 @@ var (
 				Foreground(lipgloss.Color("#555555")) // Dim gray
 )
 
+// compactDuration formats a duration as a compact string using the largest unit.
+func compactDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
 // recencyColor returns a green color that fades with elapsed time.
 func recencyColor(elapsed time.Duration) lipgloss.Color {
 	switch {
@@ -142,7 +156,7 @@ func (d browserItemDelegate) Render(w io.Writer, m list.Model, index int, item l
 
 	// Two-column layout: left (auto-width) + right (fixed width).
 	// Each cell is independently styled — no nested ANSI, no "bar" artifacts.
-	const rightColWidth = 7 // indicator / "♪ ✉" + padding
+	const rightColWidth = 12 // age label + indicator / "♪ ✉" + padding
 	leftColWidth := contentWidth - rightColWidth
 
 	blankLine := lipgloss.NewStyle().Background(bgColor).Width(contentWidth).Render("")
@@ -168,6 +182,12 @@ func (d browserItemDelegate) Render(w io.Writer, m list.Model, index int, item l
 				indicatorStyle = indicatorStyle.Foreground(recencyColor(time.Since(p.lastActivity)))
 			} else {
 				indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#00FF00"))
+			}
+			// Age label for waiting panes
+			if !p.lastActivity.IsZero() {
+				ageText := compactDuration(time.Since(p.lastActivity))
+				ageDim := lipgloss.NewStyle().Foreground(lipgloss.Color("#777777")).Render(ageText)
+				indicatorText = ageDim + " " + indicatorText
 			}
 		}
 		indicatorRight = indicatorStyle.Render(indicatorText)
@@ -2019,7 +2039,7 @@ func (m Model) renderMultiColumnItem(item list.Item, contentWidth int, isSelecte
 		bgColor = lipgloss.Color("#555555")
 	}
 
-	const rightColWidth = 7
+	const rightColWidth = 12
 	leftColWidth := contentWidth - rightColWidth
 
 	blankLine := lipgloss.NewStyle().Background(bgColor).Width(contentWidth).Render("")
@@ -2040,6 +2060,12 @@ func (m Model) renderMultiColumnItem(item list.Item, contentWidth int, isSelecte
 			indicatorStyle = indicatorStyle.Foreground(recencyColor(time.Since(i.lastActivity)))
 		} else {
 			indicatorStyle = indicatorStyle.Foreground(lipgloss.Color("#00FF00"))
+		}
+		// Age label for waiting panes
+		if !i.lastActivity.IsZero() {
+			ageText := compactDuration(time.Since(i.lastActivity))
+			ageDim := lipgloss.NewStyle().Foreground(lipgloss.Color("#777777")).Render(ageText)
+			indicatorText = ageDim + " " + indicatorText
 		}
 	}
 	indicatorRight := indicatorStyle.Render(indicatorText)

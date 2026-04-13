@@ -444,3 +444,29 @@ func TestRecencyColor(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactDuration(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{3 * time.Second, "3s"},
+		{59 * time.Second, "59s"},
+		{60 * time.Second, "1m"},
+		{90 * time.Second, "1m"},
+		{14 * time.Minute, "14m"},
+		{59*time.Minute + 59*time.Second, "59m"},
+		{60 * time.Minute, "1h"},
+		{8 * time.Hour, "8h"},
+		{23*time.Hour + 59*time.Minute, "23h"},
+		{24 * time.Hour, "1d"},
+		{72 * time.Hour, "3d"},
+	}
+	for _, tt := range tests {
+		got := compactDuration(tt.d)
+		if got != tt.want {
+			t.Errorf("compactDuration(%v) = %q, want %q", tt.d, got, tt.want)
+		}
+	}
+}

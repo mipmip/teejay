@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- activity age label: show elapsed time ("3s", "14m", "2h") next to waiting pane indicators
+
 ## [0.3.2] - 2026-04-02
 
 - fix opencode quick-answer

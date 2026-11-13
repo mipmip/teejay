@@ -1,0 +1,33 @@
+# Beans configuration
+# See: https://github.com/hmans/beans
+project:
+    # Human-readable project name (displayed in the UI)
+    name: teejay
+beans:
+    # Directory where bean files are stored
+    path: .beans
+    # Prefix for bean IDs (e.g., "myproject-abc1")
+    prefix: teejay-
+    # Length of the random ID suffix
+    id_length: 4
+    # Default status for new beans
+    default_status: todo
+    # Default type for new beans
+    default_type: task
+worktree:
+    # Git ref to use as the base for new worktree branches (default: main)
+    base_ref: main
+    # Shell command to run inside a worktree after creation (e.g. "pnpm install")
+    setup: ""
+    # Shell command to run the project (adds a "Run" button to workspace toolbar)
+    run: ""
+    # Integration strategy: "local" (squash-merge locally) or "pr" (push and create PRs)
+    integrate: local
+agent:
+    # Enable agent functionality in the web UI (true, false)
+    enabled: true
+    # Default mode for agent sessions (act, plan)
+    default_mode: act
+server:
+    # Port for the web UI (used by `beans-serve`)
+    port: 8080
